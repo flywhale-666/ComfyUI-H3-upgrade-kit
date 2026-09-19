@@ -1,0 +1,18 @@
+[project]
+name = "comfyui-h3-upgrade-kit"
+description = "MiniMax H3 latent upscaling, tiled sampling, batched VAE decoding, motion continuation, SelfLift sampling and synchronized audio/video stitching."
+version = "0.0.1"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = ["torch", "torchaudio", "einops", "safetensors"]
+
+[project.urls]
+Repository = "https://github.com/flywhale-666/ComfyUI-H3-upgrade-kit"
+"Bug Tracker" = "https://github.com/flywhale-666/ComfyUI-H3-upgrade-kit/issues"
+
+[tool.comfy]
+PublisherId = "flywhale"
+DisplayName = "ComfyUI-H3-upgrade-kit"
+Icon = ""
+includes = []
