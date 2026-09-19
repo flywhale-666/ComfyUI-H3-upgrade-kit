@@ -34,7 +34,7 @@ class H3KitSelfLiftSampler:
                     "tooltip": "低清宽高比例。前后段须使用相同设置；整段仍使用latent放大，接context_vae时仅把实际尾部画面缩小后编码为低清上下文。"}),
                 "upscale_weights": (list_upscale_weights(),),
                 "overlap_frames": ("INT", {"default": 17, "min": 17, "max": 3587, "step": 17,
-                    "tooltip": "额外增加的头部上下文：17、34、51……帧，对应前段尾部的5、10、15……个latent时间步。旧值22/39向下迁移为17/34；不占用本段新增帧数。"}),
+                    "tooltip": "额外增加的头部上下文：17、34、51……帧，对应前段尾部的5、10、15……个latent时间步；不占用本段新增帧数。"}),
                 "continue_audio": ("BOOLEAN", {"default": True,
                     "tooltip": "续接前段尾音，最后 8 个音频 token 平滑释放。已锁定的输入音轨优先。"}),
             },
@@ -111,7 +111,7 @@ class H3KitSelfLiftAVJoin:
             raise ValueError("本段未接入前段 latent；拼接前请先连接 K采的 previous_latent。")
         if previous_audio is not None and not joined:
             raise ValueError("previous_audio 需要匹配的 previous_frames。")
-        delivery = info.get("delivery_frames", info["frames"] - overlap)
+        delivery = info["delivery_frames"]
         end = overlap + delivery
         if delivery <= 0 or end > info["frames"]:
             raise ValueError("本段有效长度与采样帧数不匹配。")

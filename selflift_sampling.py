@@ -2,7 +2,6 @@
 
 import math
 import logging
-from bisect import bisect_left
 
 import torch
 import torch.nn.functional as F
@@ -45,15 +44,7 @@ def pixel_frames(tokens):
 
 def aligned_overlap(frames):
     # 新增上下文按完整周期增加：17 帧 = 5 个 latent 时间步。
-    # 旧工作流的 22/39 等值迁移为 17/34，最少一个周期。
     return max(17, int(frames) // 17 * 17)
-
-
-def frame_boundaries(tokens):
-    boundaries = [0]
-    for i in range(tokens):
-        boundaries.append(boundaries[-1] + FRAME_PER_TOKEN[i % 5])
-    return boundaries
 
 
 def encode_context_prefix(vae, samples, frames, previous_frames=None):
@@ -76,15 +67,10 @@ def encode_context_prefix(vae, samples, frames, previous_frames=None):
 
 def continuation_window(previous, requested, context_vae=None, previous_frames=None):
     video, audio = av_streams(previous)
-    bounds = frame_boundaries(video.shape[2])
-    info = previous.get(SEGMENT, {})
-    end = info.get("overlap_frames", 0) + info.get(
-        "delivery_frames", bounds[-1] - info.get("overlap_frames", 0))
-    if not requested <= end <= bounds[-1]:
-        raise ValueError("上一段有效画面不足以提供所选重叠区，或其长度信息与 latent 不匹配。")
-    stop_token = bisect_left(bounds, end)
-    if bounds[stop_token] != end:
-        raise ValueError("上一段有效终点落在 latent 时间步内部，请重新运行前段 SelfLift K采以更新旧的补尾结果。")
+    stop_token = video.shape[2]
+    end = pixel_frames(stop_token)
+    if requested > end:
+        raise ValueError("上一段画面不足以提供所选重叠区。")
     start_token = stop_token - requested // 17 * 5
     overlap = requested
     low = previous.get(LOW_CARRY)

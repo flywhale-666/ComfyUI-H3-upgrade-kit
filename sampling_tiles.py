@@ -1,7 +1,6 @@
 """Spatial H3 sampling tiling, adapted from the local SelfLift implementation."""
 
 from functools import partial
-import inspect
 import logging
 import math
 
@@ -31,10 +30,7 @@ def sampling_tile_regions(length, tile_count=2):
 
 
 def build_tile_layout(signature, payload):
-    options = {"keyframes": payload.get("keyframes"), "refs": payload.get("refs")}
-    if "frame_count" in inspect.signature(PackedLayout).parameters:
-        options["frame_count"] = payload.get("frame_count")
-    return PackedLayout(*signature, **options)
+    return PackedLayout(*signature, keyframes=payload.get("keyframes"), refs=payload.get("refs"))
 
 
 def crop_tile_payload(payload, context, video, audio, axis, start, end):
@@ -199,15 +195,11 @@ def available_tile_workspace(model):
     free = manager.get_free_memory(model.load_device)
     reclaimable = 0
     seen = set()
-    for loaded in manager.loaded_models():
-        patcher = loaded if callable(getattr(loaded, "loaded_size", None)) else loaded.model
-        load_device = getattr(patcher, "load_device", None)
+    for patcher in manager.loaded_models():
         identity = id(patcher.model)
-        if load_device == model.load_device and identity not in seen:
+        if patcher.load_device == model.load_device and identity not in seen:
             seen.add(identity)
-            size_fn = getattr(patcher, "loaded_size", None)
-            if callable(size_fn):
-                reclaimable += size_fn()
+            reclaimable += patcher.loaded_size()
     pool = min(manager.get_total_memory(model.load_device), free + reclaimable)
     weights = min(model.model_size(), pool * manager.MIN_WEIGHT_MEMORY_RATIO)
     available = max(0, pool - weights - manager.minimum_inference_memory())
