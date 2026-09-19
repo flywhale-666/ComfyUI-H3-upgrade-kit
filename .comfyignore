@@ -1,2 +1,4 @@
 .github/
 tests/
+.gitignore
+.comfyignore

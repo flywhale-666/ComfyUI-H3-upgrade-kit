@@ -1,10 +1,14 @@
 # ComfyUI-H3-upgrade-kit
 
-提供 H3 的 3D 潜空间放大、高清分块采样、VAE 分块解码、动作续接、音画裁剪，以及可直接串联的 SelfLift K采和音画拼接，共七个独立节点。入口使用 `NODE_CLASS_MAPPINGS`、`NODE_DISPLAY_NAME_MAPPINGS` 和带 `[tool.comfy]` 的 `pyproject.toml`。无需安装原节点包，也不修改 ComfyUI 核心。
+提供 H3 的 3D 潜空间放大、高清分块采样、VAE 分块解码、动作续接、音画裁剪，以及可直接串联的 SelfLift K采和音画拼接，共七个独立节点。无需安装原节点包，也不修改 ComfyUI 核心。
 
 ## 安装与查找
 
 将本目录放入 `ComfyUI/custom_nodes/`，使用 ComfyUI 的 Python 安装 `requirements.txt` 后重启。当前整合包已提供这些依赖时无需重复安装。在节点搜索中输入 `H3Kit`，或打开 `H3 Upgrade Kit` 分类。
+
+也可在 ComfyUI Manager 中搜索 `ComfyUI-H3-upgrade-kit`，或使用 `comfy node install comfyui-h3-upgrade-kit` 安装 Registry 版本。
+
+Python 依赖已列入 `requirements.txt`：`torch`、`torchaudio`、`einops`、`safetensors`。其中 `torch` 与 `torchaudio` 应沿用当前 ComfyUI 环境相互兼容的版本；`safetensors` 用于经 ComfyUI 读取放大权重。`comfy`、`comfy_api`、`comfy_extras` 等由 ComfyUI 自带，无需另外 pip 安装。前端扩展不需要 npm 安装。
 
 动作续接要求具有新版 MiniMax H3 `PackedLayout` 的 ComfyUI（上游节点注明 0.34.0 起）；首次续接会检查真实布局行为。放大与采样使用 ComfyUI V3 节点接口，由标准入口映射注册。
 
@@ -20,19 +24,21 @@
 
 新旧节点 ID 不同，可以同时安装。现有工作流继续使用原节点；使用新节点时需替换节点并重新连线。
 
-## 参数重命名
+## 示例工作流
 
-| 节点 | 原字段 → 新字段 |
-| --- | --- |
-| 放大 | `latent → source_latent`，`model_name → upscale_weights`，`mode → resize_settings`，`scale → scale_factor` |
-| 放大尺寸 | `width → target_width`，`height → target_height`，`megapixels → target_megapixels`，`align → pixel_alignment` |
-| 放大选项 | `enable_temporal_chunking → temporal_chunks`，`force_unload → release_weights`，`device → compute_backend`，`precision → compute_precision`，`highres_tiling → spatial_tiles` |
-| 采样 | `noise → noise_source`，`guider → sampling_guider`，`sampler → sampling_algorithm`，`sigmas → sigma_schedule`，`latent_image → initial_latent`，`highres_tiling → spatial_tiles`，`min_tiles → minimum_tiles` |
-| 续接 | `conditioning → positive_conditioning`，`vae → video_vae`，`latent → target_latent`，`context_frames → previous_frames`，`context_latent → previous_latent` |
-| 续接音频 | `audio_vae → sound_vae`，`context_audio → previous_audio`，`audio_context_length → audio_tail_frames` |
-| 裁剪 | `images → decoded_frames`，`audio → decoded_audio`，`trim_frames → prefix_frames`，`target_frames → delivery_frames`，`fps → frame_rate`，`match_tail → align_audio_tail` |
+[MINIMAX数字人v2加速版.json](example_workflows/MINIMAX数字人v2加速版.json) 是完整的数字人工作流，包含参考图、歌曲加载与裁剪、H3 模型和条件、两段 SelfLift 采样、视频/音频解码及视频保存。下载 JSON 后拖入 ComfyUI 即可导入。
 
-节点方法、辅助函数、模型类、模块常量、局部参数和分块补丁标识同步重命名。ComfyUI 协议键（例如 `samples`、`noise_mask`、`minimax_keyframes`、`waveform`）、第三方 API 参数及模型权重层名保留，以保证互通和权重兼容。
+示例保留原工作流的节点、连线、参数与布局，仅清理本机输出预览记录和工作区标识，并补充 H3Kit 节点的 Registry 标识。
+
+运行前需准备：
+
+- 在 `LoadImage`、`LoadAudio` 中选择自己的参考图片和音频。示例不附带图片、歌曲、生成结果或模型权重。
+- 主模型：`minimax_h3_hybrid_fl2va_ref2va_b25-49-int8.safetensors`，放入 `models/diffusion_models/`。
+- 文本编码器：`qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`，放入 `models/text_encoders/`。
+- 视频及音频 VAE：`minimax_h3_video_vae_fp16.safetensors`、`minimax_h3_audio_vae_fp32.safetensors`，放入 `models/vae/`。
+- 放大权重：`minimax_h3_latent_upscaler_3d_bf16.safetensors`，放入 `models/latent_upscale_models/`。
+- 检查两个 LoRA 加载器中的 `minimax_h3_turbo_v4_step600_pruned_comfyui.safetensors` 与 `MysticXXX_MMH3-V4.safetensors`，按本机文件位置重新选择；原工作流选择的是 `models/loras/minimaxH3/` 子目录。
+- 示例还使用 `ComfyUI-ReservedVRAM`、`ComfyUI_LayerStyle`、`ComfyUI-UniversalToolkit`、`ComfyUI-VideoHelperSuite`、`ComfyUI-KJNodes`、`rgthree-comfy`。可用 Manager 的缺失节点安装功能补齐。这些是示例工作流的节点包依赖，不是本插件的 pip 依赖。
 
 ## 使用
 
@@ -42,7 +48,6 @@
 - 动作续接已恢复视频 VAE 对齐路径，`video_vae` 必接。只传 `previous_latent` 时先解码画面，再重新编码实际末尾 17 帧；传 `previous_frames` 时优先复用画面，跳过解码但仍执行编码。音频优先直接取 `previous_latent` 尾部；仅传 `previous_audio` 时才需要 `sound_vae` 编码。没有上下文时直接透传。
 - 续接节点的 `target_latent` 输出接采样器；`prefix_frames` 和 `delivery_frames` 接裁剪节点同名输入。裁剪节点接解码后的画面和音频，`frame_rate` 应与最终视频一致（H3 默认 24）。保留原定帧数并裁掉新增的 17 帧头部，同时对齐音频长度。
 - 高清二采 context：独立放大节点保留续接信息、缩放视频遮罩并标记放大结果。再次经过动作续接时，按上一段真实高清 context 的末端残差衔接生成区域；以新段首个时间周期为基准比较同相位内容，画面变化后衰减末端补差，退回扣除时间波动后的中值残差，避免运镜时固定位置残影。然后锁定真实高清前缀。校正只消费一次放大标记，不增加采样步数、不改音频，也不改变普通直出续接。现有连线无需调整。
-- 2026-09-19 同 seed、高清2步实测：相较上一版时间中值校正，桌面固定区域第17→18帧的像素MAE从13.34降至9.03，第18→19帧从9.52升至11.88；整段该区域相邻帧MAE中值7.78→7.91。局部接缝改善不代表物品身份已完全一致。未采用整段恒定末端残差的版本：虽然接缝更低，但运镜后出现残影。对照文件在 `output/diagnostics/upscale_context/`，试验提交信息在工作区 `h3_context_fix/`。
 
 ## SelfLift K采与多段续接
 
@@ -63,7 +68,7 @@ K采 B.sampled_latent ───────────────────�
 拼接 B → Create Video（24fps）→ 保存
 ```
 
-可导入连接模块：[example_workflows/selflift_two_samplers.json](example_workflows/selflift_two_samplers.json)。示例已连接两个 K采、解码器、拼接节点和 VAE；导入后把现有工作流的模型、正负条件和各段目标 latent 接到两个 K采即可。示例不是包含模型/文本编码器的完整生成工作流。
+完整示例见上方的「MINIMAX数字人v2加速版」。以下说明用于理解各节点及按需搭建自己的续接流程。
 
 - `latent_image` 的长度代表**本段新增帧数**。`previous_latent` 不连接时生成首段；接入后只在头部增加上下文，**不再补视频尾帧**。拼接节点裁掉重复前缀，保留原定新增帧数。两段各 124 帧，最终为 **248 帧**；三段为 **372 帧**。不需要手动加帧，也不要再叠加旧动作续接节点。
 - `overlap_frames` 默认 **17**，以 **17** 为步长，使用 **17、34、51、68……**。17 帧对应 5 个 latent 时间步；将前段最后 5/10/15……个时间步分别放到下一段新增的头部，低清与高清状态使用同一区间。比如第二段目标新增 124 帧、上下文 17 帧，内部生成 **141 帧**，裁掉前 17 帧后仍保留 124 帧；上下文 34 帧则生成 158 帧、裁头 34 帧，同样无需裁视频尾部。
@@ -84,8 +89,6 @@ K采 B.sampled_latent ───────────────────�
 - 分块只影响高清去噪，不改变低清采样、latent 放大或 VAE 解码。每一步高清采样会分别计算各块，不保证提速；模型权重、完整采样状态和参考数据仍占用内存。由于块间没有完整的全局注意力，画质可能与整幅采样不同。
 - “动作续接”节点采用 17 帧前缀，支持直接 latent 或图片编码，继续服务原工作流；SelfLift 直连流程无需它，也不要再叠加旧的裁剪节点。只有新采样器输出包含所需低清状态，普通 K采输出不能直接代替。
 
-验证记录（2026-09-18）：早先`tail_guide`对照仅证明局部背景帧差下降，后续用户样本显示动作连续性变差，不能作为成功方案。原始对照保留在`output/diagnostics/seam_fix/`供复查，已撤回相应推荐及自动单帧引导。
-
 ## H3 VAE 分块解码
 
 替换工作流中画面分支的普通“VAE 解码”：采样器输出接 `video_latent`，H3 视频 VAE 接 `video_vae`，`decoded_frames` 接原来的图像/视频处理节点。音视频复合 latent 会自动提取视频，音频分支保持原接法。
@@ -103,24 +106,6 @@ K采 B.sampled_latent ───────────────────�
 开发验证中已撤掉直接放大模型窗口的路径。真实 FP16 权重对照中，原生解码器直接使用 512 会产生网格，单独修正空间位置编码也未解决。现在所有调度尺寸都使用同一组原生 256 窗口；调度器按原生坐标截取窗口、合批计算，并按原生顺序融合，因此不会因设置 512 而改变模型的空间位置编码或注意力窗口。
 
 分块不保证提速。窄画面可以把不同行的小块放进同一批，减少 decoder 调用；实际效果取决于分辨率、合批上限和显存。384 与 512 等跨度在部分画面上可能容纳相同行数，因而调度相同。`tile_edge` 表示调度跨度。继续保持 H3 的原生时间周期，不提供任意时间块长。
-
-## 注册与发布
-
-源代码仓库：[flywhale-666/ComfyUI-H3-upgrade-kit](https://github.com/flywhale-666/ComfyUI-H3-upgrade-kit)。首次发布版本为 `0.0.1`；Registry 发布者为 `flywhale`，节点包 ID 为 `comfyui-h3-upgrade-kit`。
-
-维护者在仓库的 Actions Secrets 中配置 `REGISTRY_ACCESS_TOKEN` 后，可手动运行 `Publish to Comfy registry`，或更新主分支 `pyproject.toml` 的版本号触发发布。已发布版本不能重复使用。Registry 安装包保留节点源码、前端扩展、示例工作流和许可证，通过 `.comfyignore` 排除测试和 CI 配置。
-
-## 验证
-
-在整合包根目录执行：
-
-```powershell
-.\python_embeded\python.exe -X utf8 -m unittest discover -s ComfyUI/custom_nodes/ComfyUI-H3-upgrade-kit/tests -p "test_*.py" -v
-```
-
-21 项检查使用真实 ComfyUI 加载器和 CPU 张量，覆盖注册、重命名参数绑定、H3 布局、17 帧前缀与遮罩、音频同步、独立分块补丁、三种放大模式及安全权重加载。解码测试覆盖多种调度跨度、跨行合批、帧数和样本顺序、OOM 回退及异常后的补丁还原。
-
-另使用本机真实 `minimax_h3_video_vae_fp16.safetensors` 和已生成 latent，在 RTX 5090 上对照官方解码：256、384、512、768、1024 五种调度跨度，重叠 64、每批 2，对 768×768 的全部 22 帧逐像素比较，最大误差均为 0。该结果只代表这一测试样本与配置，不保证所有硬件、精度或合批大小都位级一致，也不是完整工作流的提速承诺。
 
 ## 来源
 
