@@ -26,7 +26,7 @@
 | 裁掉续接时重复的开头，同步音频长度 | **H3Kit 音画同步裁剪** |
 | 分批处理 H3 视频 VAE 解码的小块 | **H3Kit VAE 分块解码** |
 
-使用本插件不需要另外安装上面三个原插件，也不会修改 ComfyUI 核心文件。示例工作流用到的其他辅助节点包，见下面的准备说明。
+使用本插件不需要另外安装上面三个原插件，也不会修改 ComfyUI 核心文件。
 
 ## 安装
 
@@ -56,47 +56,9 @@ git clone https://github.com/flywhale-666/ComfyUI-H3-upgrade-kit.git
 
 ### MINIMAX 数字人 v2 加速版
 
+使用参考图片和音频生成数字人视频，演示两段 SelfLift 采样、续接和音画拼接。下载 JSON 后拖入 ComfyUI，即可查看完整工作流。
+
 **[下载工作流 JSON](https://raw.githubusercontent.com/flywhale-666/ComfyUI-H3-upgrade-kit/main/example_workflows/minimax_digital_human_v2_accelerated.json)** · [查看工作流文件](example_workflows/minimax_digital_human_v2_accelerated.json)
-
-这是一条完整的数字人工作流，包含参考图、歌曲加载与裁剪、模型加载、两段 SelfLift 采样、音视频解码和视频保存。
-
-1. 下载 JSON，拖入 ComfyUI。
-2. 安装缺失的辅助节点，并在加载器中选好本机模型。
-3. 在 `LoadImage` 和 `LoadAudio` 中换成自己的参考图片、音频。
-4. 检查提示词、分辨率和采样参数，再开始生成。
-
-示例不附带模型、图片、歌曲或生成结果，需要自行准备。模型文件不在同一子目录时，在对应加载器里重新选择即可。
-
-<details>
-<summary><strong>展开查看：示例使用的模型</strong></summary>
-
-下面的目录均相对于 `ComfyUI/models/`。
-
-| 用途 | 示例选择的文件 | 放置目录 |
-| --- | --- | --- |
-| H3 主模型 | `minimax_h3_hybrid_fl2va_ref2va_b25-49-int8.safetensors` | `diffusion_models/` |
-| 文本编码器 | `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` | `text_encoders/` |
-| 视频 VAE | `minimax_h3_video_vae_fp16.safetensors` | `vae/` |
-| 音频 VAE | `minimax_h3_audio_vae_fp32.safetensors` | `vae/` |
-| 潜空间放大模型 | `minimax_h3_latent_upscaler_3d_bf16.safetensors` | `latent_upscale_models/` |
-| 加速 LoRA | `minimax_h3_turbo_v4_step600_pruned_comfyui.safetensors` | `loras/minimaxH3/` |
-| 另一处 LoRA 加载器 | `MysticXXX_MMH3-V4.safetensors` | `loras/minimaxH3/` |
-
-</details>
-
-<details>
-<summary><strong>展开查看：示例使用的其他节点包</strong></summary>
-
-- `ComfyUI-ReservedVRAM`
-- `ComfyUI_LayerStyle`
-- `ComfyUI-UniversalToolkit`
-- `ComfyUI-VideoHelperSuite`
-- `ComfyUI-KJNodes`
-- `rgthree-comfy`
-
-可通过 Manager 的缺失节点安装功能补齐。这些是这条示例工作流使用的辅助节点包，不是本插件需要额外安装的 Python 依赖。
-
-</details>
 
 ## SelfLift 多段续接
 
@@ -208,10 +170,6 @@ H3 条件与目标 latent → 动作续接 → 采样 → 解码 → 音画同�
 **安装后找不到节点？**
 
 先重启 ComfyUI，再搜索 `H3Kit`。如果仍找不到，检查启动日志中的导入错误，并确认 ComfyUI 版本支持 MiniMax H3。
-
-**导入示例后出现红色缺失节点？**
-
-示例还使用了一些辅助节点包，按“工作流示例”中的清单补齐；同时检查模型加载器中的文件选择。
 
 **用了分块就一定更快、更省显存吗？**
 

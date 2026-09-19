@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-h3-upgrade-kit"
 description = "MiniMax H3 latent upscaling, tiled sampling, batched VAE decoding, motion continuation, SelfLift sampling and synchronized audio/video stitching."
-version = "0.0.6"
+version = "0.0.7"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
