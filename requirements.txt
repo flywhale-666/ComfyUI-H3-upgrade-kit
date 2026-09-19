@@ -1,7 +1,0 @@
-# torch 与 torchaudio 使用当前 ComfyUI 环境中相互兼容的版本。
-torch
-torchaudio
-# 潜空间放大网络的张量重排。
-einops
-# 通过 comfy.utils.load_torch_file 读取放大模型权重。
-safetensors

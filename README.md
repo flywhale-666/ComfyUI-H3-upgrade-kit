@@ -4,11 +4,11 @@
 
 ## 安装与查找
 
-将本目录放入 `ComfyUI/custom_nodes/`，使用 ComfyUI 的 Python 安装 `requirements.txt` 后重启。当前整合包已提供这些依赖时无需重复安装。在节点搜索中输入 `H3Kit`，或打开 `H3 Upgrade Kit` 分类。
+将本目录放入 `ComfyUI/custom_nodes/` 后重启。在节点搜索中输入 `H3Kit`，或打开 `H3 Upgrade Kit` 分类。
 
 也可在 ComfyUI Manager 中搜索 `ComfyUI-H3-upgrade-kit`，或使用 `comfy node install comfyui-h3-upgrade-kit` 安装 Registry 版本。
 
-Python 依赖已列入 `requirements.txt`：`torch`、`torchaudio`、`einops`、`safetensors`。其中 `torch` 与 `torchaudio` 应沿用当前 ComfyUI 环境相互兼容的版本；`safetensors` 用于经 ComfyUI 读取放大权重。`comfy`、`comfy_api`、`comfy_extras` 等由 ComfyUI 自带，无需另外 pip 安装。前端扩展不需要 npm 安装。
+本插件没有需要额外安装的 Python 依赖，`requirements.txt` 留空，发布元数据为 `dependencies = []`。所用的 `torch`、`torchaudio`、`einops`、`safetensors` 已由 ComfyUI 提供，不重复声明或安装。前端扩展不需要 npm 安装。示例工作流需要的其他节点包见下方说明。
 
 动作续接要求具有新版 MiniMax H3 `PackedLayout` 的 ComfyUI（上游节点注明 0.34.0 起）；首次续接会检查真实布局行为。放大与采样使用 ComfyUI V3 节点接口，由标准入口映射注册。
 
