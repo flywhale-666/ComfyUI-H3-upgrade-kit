@@ -2889,7 +2889,7 @@
       "properties": {
         "Node name for S&R": "H3KitSelfLiftSampler",
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.2"
+        "ver": "0.0.3"
       },
       "widgets_values": [
         492241100944042,
@@ -3126,7 +3126,7 @@
       "properties": {
         "Node name for S&R": "H3KitSelfLiftSampler",
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.2"
+        "ver": "0.0.3"
       },
       "widgets_values": [
         1062506860869794,
@@ -3229,7 +3229,7 @@
       "properties": {
         "Node name for S&R": "H3KitSelfLiftAVJoin",
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.2"
+        "ver": "0.0.3"
       }
     },
     {

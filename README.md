@@ -26,7 +26,7 @@ Python 依赖已列入 `requirements.txt`：`torch`、`torchaudio`、`einops`、
 
 ## 示例工作流
 
-[MINIMAX数字人v2加速版.json](example_workflows/MINIMAX数字人v2加速版.json) 是完整的数字人工作流，包含参考图、歌曲加载与裁剪、H3 模型和条件、两段 SelfLift 采样、视频/音频解码及视频保存。下载 JSON 后拖入 ComfyUI 即可导入。
+[MINIMAX数字人v2加速版](example_workflows/minimax_digital_human_v2_accelerated.json) 是完整的数字人工作流，包含参考图、歌曲加载与裁剪、H3 模型和条件、两段 SelfLift 采样、视频/音频解码及视频保存。下载 `minimax_digital_human_v2_accelerated.json` 后拖入 ComfyUI 即可导入。
 
 示例保留原工作流的节点、连线、参数与布局，仅清理本机输出预览记录和工作区标识，并补充 H3Kit 节点的 Registry 标识。
 
