@@ -58,7 +58,11 @@ git clone https://github.com/flywhale-666/ComfyUI-H3-upgrade-kit.git
 
 ### MINIMAX 数字人 v2 加速版
 
-使用参考图片和音频生成数字人视频，演示两段 SelfLift 采样、续接和音画拼接。下载 JSON 后拖入 ComfyUI，即可查看完整工作流。
+使用参考图片和音频生成数字人视频。为了测试两段 SelfLift 采样、续接和音画拼接，示例将同一条音频切成两段，分别生成后再衔接。
+
+H3 视频长度按 **17 帧周期**对齐（有效帧数为 `17k+5`），音频按秒裁切，需要结合视频的 **24fps** 换算，因此切分点的计算稍微麻烦一些。工作流保留了相关计算与裁切节点，调整段长时请一起检查音频切分点。下载 JSON 后拖入 ComfyUI，即可查看完整工作流。
+
+请自行选择参考图片、音频和本机对应的 H3 模型、文本编码器、音视频 VAE、加速 LoRA 及 latent 放大模型，素材和模型不随示例提供。示例还使用 ComfyUI-UniversalToolkit、ComfyUI-VideoHelperSuite、ComfyUI-KJNodes、ComfyUI_LayerStyle、ComfyUI_Comfyroll_CustomNodes、ComfyUI-ReservedVRAM 和 rgthree-comfy，缺失时需另行安装。
 
 **[下载工作流 JSON](https://raw.githubusercontent.com/flywhale-666/ComfyUI-H3-upgrade-kit/main/example_workflows/minimax_digital_human_v2_accelerated.json)** · [查看工作流文件](example_workflows/minimax_digital_human_v2_accelerated.json)
 
