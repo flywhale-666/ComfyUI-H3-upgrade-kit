@@ -3163,7 +3163,7 @@
     },
     {
       "id": 232,
-      "type": "H3KitSelfLiftAVJoin",
+      "type": "H3KitAVJoin",
       "pos": [
         2903.461487373325,
         4701.760791545713
@@ -3227,7 +3227,7 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "H3KitSelfLiftAVJoin",
+        "Node name for S&R": "H3KitAVJoin",
         "cnr_id": "comfyui-h3-upgrade-kit",
         "ver": "0.0.3"
       }

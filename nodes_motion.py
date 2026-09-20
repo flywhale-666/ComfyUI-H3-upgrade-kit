@@ -1,5 +1,5 @@
 # 移植自 ComfyUI-H3-Motion-Context；原始 GPL-3.0 许可见 LICENSE。
-"""Reserve a 17-frame prefix and end-align the previous clip latent tail."""
+"""按 17 帧周期预留重叠区，或只用前段尾帧引导新片段。"""
 
 import logging
 
@@ -114,18 +114,18 @@ def video_stream(target_latent):
     return video
 
 
-def reserve_motion_prefix(target_latent):
+def reserve_motion_prefix(target_latent, previous_frames=17):
     """Reserve a head on the H3 grid, keeping the original delivery length."""
-    previous_frames = 17
     previous = target_latent.get("h3kit_motion_length")
     if previous is not None:
         if previous[1] != previous_frames:
-            raise ValueError("h3kit_motion: this latent uses the old padding mode. "
-                             "Restart from the original, unextended latent.")
+            raise ValueError("重叠帧数与已扩展的 latent 不一致，请连接本段尚未添加重叠区的原始 latent。")
         return target_latent, previous[0]
 
     video, decoded_audio = split_av_streams(target_latent)
     delivery_frames = count_pixel_frames(int(video.shape[2]))
+    if previous_frames == 0:
+        return target_latent, delivery_frames
     frames = delivery_frames + previous_frames
     frames += (5 - frames % 17) % 17
     video_t = (frames - 5) // 17 * 5 + 2
@@ -157,24 +157,25 @@ def reserve_motion_prefix(target_latent):
     return out, delivery_frames
 
 
-def encode_motion_prefix(video_vae, frames, width, height):
+def encode_motion_prefix(video_vae, frames, width, height, overlap_frames=17):
     """Re-encode the actual tail at cycle position zero for the new prefix."""
     available = int(frames.shape[0])
     if available < 1:
         raise ValueError("h3kit_motion: no previous frames available")
-    tail = frames[-17:, ..., :3]
+    tail = frames[-max(1, overlap_frames):, ..., :3]
     if tail.shape[1:3] != (height, width):
         tail = resize_reference_frames(tail, width, height, H3KIT_CROP)
-    if available < 17:
-        tail = torch.cat((tail[:1].repeat(17 - available, 1, 1, 1), tail), dim=0)
-    # H3 drops three encoded steps. Add a disposable 5-frame suffix to get
-    # all five steps of the first 17-frame block, then discard the suffix.
+    if overlap_frames == 0:
+        return video_vae.encode(tail)
+    if available < overlap_frames:
+        tail = torch.cat((tail[:1].repeat(overlap_frames - available, 1, 1, 1), tail), dim=0)
+    # 额外编码 5 帧以取得完整的 17 帧周期，随后丢掉补充部分。
     window = torch.cat((tail, tail[-1:].repeat(5, 1, 1, 1)), dim=0)
     encoded = video_vae.encode(window)
-    if encoded.ndim != 5 or encoded.shape[2] != 7:
-        raise ValueError("h3kit_motion: expected 7 latent steps for "
-                         "22 video frames. Check the H3 video VAE.")
-    return encoded[:, :, :5].clone()
+    prefix_tokens = overlap_frames // 17 * 5
+    if encoded.ndim != 5 or encoded.shape[2] != prefix_tokens + 2:
+        raise ValueError("重叠区编码长度不符合 H3 的 17 帧周期，请检查视频 VAE。")
+    return encoded[:, :, :prefix_tokens].clone()
 
 
 def match_upscaled_motion_context(video, reference, video_mask):
@@ -213,8 +214,9 @@ def lock_motion_prefix(target_latent, reference):
     if target_latent.get("h3kit_upscaled_motion"):
         match_upscaled_motion_context(video, reference, video_mask)
         H3KIT_MOTION_LOG.info("h3kit_motion: matched upscaled context before high-resolution sampling")
-    video[:, :, :5].copy_(reference.to(video))
-    video_mask[:, :, :5] = 0
+    prefix = reference.shape[2]
+    video[:, :, :prefix].copy_(reference.to(video))
+    video_mask[:, :, :prefix] = 0
     out = target_latent.copy()
     out.pop("h3kit_upscaled_motion", None)
     out["samples"] = comfy.nested_tensor.NestedTensor((video, decoded_audio))
@@ -292,28 +294,16 @@ class H3KitMotionBridge:
                 "positive_conditioning": ("CONDITIONING",),
                 "video_vae": ("VAE",),
                 "target_latent": ("LATENT",),
-                "audio_tail_frames": ("INT", {
-                    "default": 24, "min": 0, "max": 240,
-                    "tooltip": "Frames of tail audio to pin, independent of "
-                               "the picture window. 0 uses 17 frames. The window "
-                               "is END-aligned with the pinned video, so "
-                               "this only controls how far back the sound "
-                               "reaches. Multiples of 3 land exactly on the "
-                               "40 Hz audio grid and multiples of 24 are "
-                               "whole seconds: 24 pins the last second. "
-                               "Off-grid values are widened to the nearest "
-                               "whole step."}),
+                "overlap_frames": ("INT", {
+                    "default": 17, "min": 0, "max": 4080, "step": 17,
+                    "tooltip": "0：只参考前段最后一帧，不增加重叠区；17、34、51……：增加对应帧数的重叠区，并输出给裁剪节点。非整倍数向下对齐到 17 的倍数。音频自动参考 max(24, 重叠帧数) 帧；素材不足时使用现有尾音。"}),
             },
             "optional": {
                 "previous_frames": ("IMAGE", {
                     "tooltip": "上一段最终输出的画面。优先使用以避免重复解码 previous_latent，"
-                               "编码末尾 17 帧并将参考末尾对齐到本段第 17 帧。"}),
+                               "按 overlap_frames 编码末尾画面；0 时只取最后一帧。"}),
                 "previous_latent": ("LATENT", {
-                    "tooltip": "Previous clip's SAMPLER OUTPUT latent (the "
-                               "same one you wire into the decode nodes). "
-                               "The final 17 decoded frames are re-encoded for "
-                               "the new prefix's temporal phase. Connect matching "
-                               "previous_frames to reuse already decoded pictures."}),
+                    "tooltip": "前段采样器的原始音视频 latent。未接 previous_frames 时先解码其尾部画面；音频直接取 latent 尾部作为参考。"}),
                 "sound_vae": ("VAE", {
                     "tooltip": "H3 audio VAE. Supply with previous_audio to "
                                "carry the previous clip's tail sound across "
@@ -331,12 +321,12 @@ class H3KitMotionBridge:
     RETURN_NAMES = ("positive_conditioning", "prefix_frames", "target_latent", "delivery_frames")
     FUNCTION = "bridge_motion"
     CATEGORY = "H3 Upgrade Kit/视频续接"
-    DESCRIPTION = ("固定在开头增加 17 帧，将上一段实际末尾 17 帧重新编码到新片段的时间周期，"
-                   "以连续 latent 块提供参考，并用采样遮罩固定前 17 帧。"
-                   "latent 输出接采样器，prefix_frames 和 delivery_frames 输出接 Trim。"
-                   "最终裁掉前 17 帧，保留原定长度。没有上下文时保持原样。")
+    DESCRIPTION = ("重叠帧数可选 0、17、34、51……；0 时只参考前段尾帧，不增加长度、不锁定重叠区。"
+                   "大于 0 时编码并锁定对应长度的前段尾部。音频参考长度自动取 max(24, 重叠帧数)。"
+                   "latent 输出接采样器，prefix_frames 和 delivery_frames 输出接‘音画裁剪与拼接’。"
+                   "裁剪后保留原定新增长度。没有前段上下文时保持原样。")
 
-    def bridge_motion(self, positive_conditioning, video_vae, target_latent, audio_tail_frames=24,
+    def bridge_motion(self, positive_conditioning, video_vae, target_latent, overlap_frames=17,
               previous_frames=None, previous_latent=None, sound_vae=None,
               previous_audio=None):
         if previous_latent is None and previous_frames is None:
@@ -344,7 +334,7 @@ class H3KitMotionBridge:
         check_motion_layout()
         encode_mode, anchor_mode = "video", "head"
         audio_mode = H3KIT_AUDIO_MODE
-        span = 17
+        span = max(0, int(overlap_frames)) // 17 * 17
         video = video_stream(target_latent)
         width, height = int(video.shape[4]) * 16, int(video.shape[3]) * 16
 
@@ -363,10 +353,11 @@ class H3KitMotionBridge:
                 else:
                     previous_frames = decoded
 
-        reference = encode_motion_prefix(video_vae, previous_frames, width, height)
-        video_src, n = "phase-aligned pixels", 17
-        target_latent, delivery_frames = reserve_motion_prefix(target_latent)
-        target_latent = lock_motion_prefix(target_latent, reference)
+        reference = encode_motion_prefix(video_vae, previous_frames, width, height, span)
+        video_src, n = "phase-aligned pixels" if span else "last frame", max(1, span)
+        target_latent, delivery_frames = reserve_motion_prefix(target_latent, span)
+        if span:
+            target_latent = lock_motion_prefix(target_latent, reference)
         frame_count = count_pixel_frames(int(video_stream(target_latent).shape[2]))
 
         # H3 supplies the 0,1,5,9,13 positions for this complete temporal block.
@@ -386,7 +377,7 @@ class H3KitMotionBridge:
         if previous_latent is not None or previous_audio is not None:
             # the audio window is independent of the video one: audio cond
             # rows cost rows but never cost delivered frames
-            a_frames = int(audio_tail_frames) or 17
+            a_frames = max(24, span)
             if previous_latent is not None:
                 if previous_audio is not None:
                     H3KIT_MOTION_LOG.info("h3kit_motion: both previous_latent and "
@@ -479,7 +470,7 @@ class H3KitMotionBridge:
         # identity source, though.  Preserve that information as a soft
         # image reference while removing only its conflicting frame-0
         # placement.  Multi-frame/interior guides are still dropped.
-        head_end = span if anchor_mode == "head" else 0
+        head_end = max(1, span)
         tail_kfs = [audio_kf] if audio_kf is not None else []
         out = []
         dropped = []
@@ -518,7 +509,7 @@ class H3KitMotionBridge:
                     continue
                 kept.append(dict(kf))
             d["minimax_keyframes"] = kept + keyframes + tail_kfs
-            d["h3kit_motion_prefix"] = 17
+            d["h3kit_motion_prefix"] = span
             if identity_refs:
                 # Keep any Ref2VA blocks already present and append the
                 # former first frame as an identity/appearance reference.
@@ -545,7 +536,7 @@ class H3KitMotionBridge:
 
         trim = span if anchor_mode == "head" else 0
         H3KIT_MOTION_LOG.info("h3kit_motion: video from %s, %s/%s, %d frames -> "
-                  "one 5-step condition block, prefix masked, %d frame clip at %dx%d, "
+                  "one condition block, %d frame clip at %dx%d, "
                   "trim %d, audio %s",
                   video_src, encode_mode, anchor_mode, n,
                   frame_count, width, height, trim,
@@ -556,151 +547,3 @@ class H3KitMotionBridge:
                       else "stock ref placement"))
                   if ref_audio_t else "off")
         return (out, trim, target_latent, delivery_frames)
-
-
-class H3KitAVTrim:
-    """Drop the pinned head off a decoded clip, picture and sound together.
-
-    The pinned frames occupy the start of the delivered timeline, so they
-    have to come off before concatenating. Trimming only the images would
-    leave the audio a full prefix_frames longer than the video, and muxing
-    those puts the whole soundtrack ahead of the picture by prefix_frames/24
-    seconds. At 5 frames that is 208ms, silent on ambience but squarely
-    offbeat on anything with a pulse.
-
-    So this takes both streams and removes the same span from each: whole
-    frames from the images, the matching number of samples from the
-    waveform. Wire prefix_frames from the motion context node so the count
-    follows whatever the encoder actually produced.
-
-    The tail needs the same treatment for a different reason. H3's audio
-    latent runs at 40 Hz against 24 fps picture, and FRAME_RESCALE is 5/3,
-    so the grid rarely lands on a frame boundary. It rounds to the
-    NEAREST step, which means a clip ships either about 8.3 ms more sound
-    than picture or about 8.3 ms less, depending on its length:
-
-        frames % 3 == 0   243 wants 405.00 steps, gets 405, exact
-        frames % 3 == 1   124 wants 206.67 steps, gets 207, sound is long
-        frames % 3 == 2   260 wants 433.33 steps, gets 433, sound is short
-
-    Either way the error compounds. Concatenate two clips and the second
-    seam is out by 16.7 ms, three and it is 25 ms, and it grows without
-    bound down a chain. It reads as a faint dampening at the first join
-    and a short click at later ones. Matching the tail to exactly
-    frames/fps stops it accumulating: a long tail is truncated, a short
-    one is zero-padded. The padded samples are sound the model never
-    generated, so silence is the only honest fill.
-    """
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "decoded_frames": ("IMAGE",),
-                "prefix_frames": ("INT", {"default": 0, "min": 0, "max": 4096}),
-            },
-            "optional": {
-                "decoded_audio": ("AUDIO", {
-                    "tooltip": "Decoded audio for the same clip. Trimmed by the "
-                               "matching duration so sound stays locked to "
-                               "picture. Leave unwired for silent clips."}),
-                "frame_rate": ("FLOAT", {
-                    "default": 24.0, "min": 1.0, "max": 240.0, "step": 0.001,
-                    "tooltip": "Frame rate used to convert the trim into an "
-                               "audio duration. Must match what you feed "
-                               "Create Video."}),
-                "align_audio_tail": ("BOOLEAN", {
-                    "default": True,
-                    "tooltip": "Make the audio duration equal frames/fps "
-                               "exactly, trimming a long tail or padding a "
-                               "short one with silence. H3 rounds its audio "
-                               "grid to the nearest step, so each clip "
-                               "carries about 8ms too much or too little "
-                               "sound, which accumulates at every join in a "
-                               "chain."}),
-                "delivery_frames": ("INT", {
-                    "default": 0, "min": 0, "max": 100000,
-                    "forceInput": True,
-                    "tooltip": "连接 Motion Context 的 delivery_frames，裁掉自动补帧产生的多余尾帧；"
-                               "0 表示保留去掉头部后的全部帧。"}),
-            },
-        }
-
-    RETURN_TYPES = ("IMAGE", "AUDIO")
-    RETURN_NAMES = ("trimmed_frames", "trimmed_audio")
-    FUNCTION = "trim_av"
-    CATEGORY = "H3 Upgrade Kit/视频续接"
-    DESCRIPTION = ("Remove the leading pinned frames from a decoded H3 clip, "
-                   "trimming picture and sound by the same duration.")
-
-    def trim_av(self, decoded_frames, prefix_frames, decoded_audio=None, frame_rate=24.0, align_audio_tail=True,
-             delivery_frames=0):
-        n = max(0, int(prefix_frames))
-        total = int(decoded_frames.shape[0])
-        if n >= total:
-            raise ValueError(
-                "h3kit_motion: asked to trim %d frames from a %d frame clip"
-                % (n, total))
-        trimmed_frames = decoded_frames[n:] if n else decoded_frames
-        if delivery_frames > 0:
-            if delivery_frames > total - n:
-                raise ValueError("h3kit_motion: not enough generated frames. "
-                                 "Wire Motion Context's extended latent to the sampler.")
-            trimmed_frames = trimmed_frames[:delivery_frames]
-        frames_left = int(trimmed_frames.shape[0])
-
-        trimmed_audio = decoded_audio
-        if decoded_audio is not None:
-            waveform = decoded_audio["waveform"]
-            sr = int(decoded_audio["sample_rate"])
-            seconds = n / float(frame_rate)
-            cut = int(round(seconds * sr))
-            length = int(waveform.shape[-1])
-            if cut >= length:
-                raise ValueError(
-                    "h3kit_motion: trimming %.3fs from %.3fs of audio would "
-                    "leave nothing. Check that fps matches the clip."
-                    % (seconds, length / sr))
-            waveform = waveform[..., cut:]
-
-            if align_audio_tail or delivery_frames > 0:
-                want = int(round(frames_left / float(frame_rate) * sr))
-                have = int(waveform.shape[-1])
-                if have > want:
-                    over = have - want
-                    waveform = waveform[..., :want]
-                    H3KIT_MOTION_LOG.info("h3kit_motion: tail trimmed %d samples "
-                              "(%.2fms) so audio matches %d frames exactly",
-                              over, over / sr * 1000.0, frames_left)
-                elif have < want:
-                    # H3 rounds to the nearest audio step, so a third of
-                    # clip lengths ship slightly LESS sound than picture
-                    # rather than more. The missing samples are sound
-                    # that was never generated, so zero is the honest
-                    # fill; anything else would fabricate or attenuate
-                    # real content to hide a seam. Leaving it short
-                    # instead drifts every later clip earlier, and unlike
-                    # the long case that error compounds down the chain.
-                    # This also restores what the vae path assumes when
-                    # it sets overhang to 0.
-                    missing = want - have
-                    waveform = torch.nn.functional.pad(waveform,
-                                                       (0, missing))
-                    H3KIT_MOTION_LOG.info("h3kit_motion: tail padded %d zero "
-                              "samples (%.2fms) so audio matches %d "
-                              "frames exactly",
-                              missing, missing / sr * 1000.0, frames_left)
-
-            trimmed_audio = {"waveform": waveform, "sample_rate": sr}
-            H3KIT_MOTION_LOG.info("h3kit_motion: %d frames / %.4fs picture, %.4fs sound, "
-                      "drift %.2fms",
-                      frames_left, frames_left / float(frame_rate),
-                      int(waveform.shape[-1]) / sr,
-                      abs(frames_left / float(frame_rate) - int(waveform.shape[-1]) / sr) * 1000.0)
-        elif n:
-            H3KIT_MOTION_LOG.info("h3kit_motion: trimmed %d leading frames, %d remain. "
-                      "No audio wired; if this clip has sound, mux it through "
-                      "this node or it will run %.3fs ahead of the picture.",
-                      n, frames_left, n / float(frame_rate))
-
-        return (trimmed_frames, trimmed_audio)

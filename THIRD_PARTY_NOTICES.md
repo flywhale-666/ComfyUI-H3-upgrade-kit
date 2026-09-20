@@ -10,7 +10,7 @@
 
 该项目的渐进采样来源为 [facok/comfyui-SelfLift](https://github.com/facok/comfyui-SelfLift)，对照版本 `19ec540505dcbc261aaecf450d83c7536be2826d`；Drift-Control AV 来源为 [ethanfel/ComfyUI-MiniMaxH3-Contex-Loop](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop)。保留这些来源说明。本次仅移植所需 H3 推理算法，复用本插件的 LBH-123-AI 放大网络，不引入时间线、像素/VAE 校正、TST 或运行时外部插件依赖。
 
-`nodes_selflift.py` 提供独立节点接口和按采样元数据进行的音画拼接。节点改名、接口调整和裁减功能不改变所移植代码的许可义务。
+`nodes_selflift.py` 提供独立采样节点接口；`nodes_av_join.py` 整合按 SelfLift 采样元数据进行的音画拼接与普通采样的裁剪逻辑。节点改名、接口调整和裁减功能不改变所移植代码的许可义务。
 
 本插件根据本机已有版本移植（2026-09-18），保留原算法以及本机已有的时间分块、空间分块、17 帧前缀和身份参考处理。
 

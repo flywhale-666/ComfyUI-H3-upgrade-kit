@@ -1,14 +1,10 @@
 """可串联的 SelfLift K采与解码后的音画拼接。"""
 
-import torch
-import torch.nn.functional as F
-import torchaudio.functional
-
 import comfy.samplers
 from comfy_extras.nodes_custom_sampler import BasicScheduler
 
 from .nodes_latent_upscale import list_upscale_weights
-from .selflift_sampling import SEGMENT, progressive_sample
+from .selflift_sampling import progressive_sample
 
 
 class H3KitSelfLiftSampler:
@@ -55,7 +51,7 @@ class H3KitSelfLiftSampler:
     RETURN_NAMES = ("sampled_latent",)
     FUNCTION = "sample"
     CATEGORY = "H3 Upgrade Kit/采样"
-    DESCRIPTION = "低清采样→学习型latent放大→高清续采。前段输出接previous_latent；两个阶段各自锁定连续重叠区并加入整段运动引导，单张首帧转为外观参考；放大后按高清尾部校正新画面。解码后接‘SelfLift续接音画拼接’。"
+    DESCRIPTION = "低清采样→学习型latent放大→高清续采。前段输出接previous_latent；两个阶段各自锁定连续重叠区并加入整段运动引导，单张首帧转为外观参考；放大后按高清尾部校正新画面。解码后接‘音画裁剪与拼接’。"
 
     def sample(self, model, positive, negative, latent_image, seed, steps, cfg, scheduler,
                high_resolution_steps, lowres_scale, upscale_weights, overlap_frames,
@@ -70,82 +66,3 @@ class H3KitSelfLiftSampler:
                                    previous_latent, overlap_frames, continue_audio, sampler_name=sampler_name,
                                    spatial_tiles=spatial_tiles, minimum_tiles=minimum_tiles,
                                    context_vae=context_vae, previous_frames=previous_frames),)
-
-
-def fit_audio(waveform, length):
-    if waveform.shape[-1] < length:
-        return F.pad(waveform, (0, length - waveform.shape[-1]))
-    return waveform[..., :length]
-
-
-class H3KitSelfLiftAVJoin:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "sampled_latent": ("LATENT", {"tooltip": "本段 SelfLift K采输出，用于读取实际重叠和音频续接信息。"}),
-                "decoded_frames": ("IMAGE", {"tooltip": "本段完整解码画面，不要预先裁掉重叠。"}),
-            },
-            "optional": {
-                "decoded_audio": ("AUDIO",),
-                "previous_frames": ("IMAGE", {"tooltip": "前一拼接节点的 images，或第一段完整解码画面。"}),
-                "previous_audio": ("AUDIO", {"tooltip": "与 previous_frames 同步的累积音频；多段视频可连续串联。"}),
-            },
-        }
-
-    RETURN_TYPES = ("IMAGE", "AUDIO", "LATENT")
-    RETURN_NAMES = ("images", "audio", "latent")
-    FUNCTION = "join"
-    CATEGORY = "H3 Upgrade Kit/视频续接"
-    DESCRIPTION = "裁掉17帧整数倍的重复前缀，保留本段原定新增帧数；启用 Soft AV 时用后段过渡音频替换前段对应尾音。按24fps对齐音频长度。latent 原样输出本段 sampled_latent，可接下一段 K采的 previous_latent。"
-
-    def join(self, sampled_latent, decoded_frames, decoded_audio=None, previous_frames=None, previous_audio=None):
-        info = sampled_latent.get(SEGMENT)
-        if info is None:
-            raise ValueError("请连接 H3Kit SelfLift K采的原始输出，以读取续接信息。")
-        if decoded_frames.shape[0] != info["frames"]:
-            raise ValueError("解码帧数与采样 latent 不匹配，请连接本段未经裁剪的完整画面。")
-        overlap = info["overlap_frames"]
-        joined = previous_frames is not None
-        if joined and not overlap:
-            raise ValueError("本段未接入前段 latent；拼接前请先连接 K采的 previous_latent。")
-        if previous_audio is not None and not joined:
-            raise ValueError("previous_audio 需要匹配的 previous_frames。")
-        delivery = info["delivery_frames"]
-        end = overlap + delivery
-        if delivery <= 0 or end > info["frames"]:
-            raise ValueError("本段有效长度与采样帧数不匹配。")
-        frames = decoded_frames[overlap:end].clone()
-        if joined:
-            if previous_frames.shape[0] < overlap:
-                raise ValueError("前段画面短于重叠区。")
-            frames = torch.cat((previous_frames, frames.to(previous_frames)), dim=0)
-        if decoded_audio is None and previous_audio is None:
-            return frames, None, sampled_latent
-        source = decoded_audio if decoded_audio is not None else previous_audio
-        sr = source["sample_rate"]
-        template = source["waveform"]
-        current_length = round(end * sr / 24)
-        current = (decoded_audio["waveform"] if decoded_audio is not None
-                   else template.new_zeros((*template.shape[:-1], current_length)))
-        current = fit_audio(current, current_length)
-        cut = round(overlap * sr / 24)
-        if joined:
-            prior_length = round(previous_frames.shape[0] * sr / 24)
-            if previous_audio is None:
-                prior = template.new_zeros((*template.shape[:-1], prior_length))
-            else:
-                prior = previous_audio["waveform"].to(template)
-                if previous_audio["sample_rate"] != sr:
-                    prior = torchaudio.functional.resample(prior, previous_audio["sample_rate"], sr)
-                if prior.shape[:-1] != current.shape[:-1]:
-                    raise ValueError("前后段音频的批次和声道数必须一致。")
-                prior = fit_audio(prior, prior_length)
-            if info["soft_audio"] and decoded_audio is not None and previous_audio is not None:
-                waveform = torch.cat((prior[..., :prior_length - cut], current), dim=-1)
-            else:
-                waveform = torch.cat((prior, current[..., cut:]), dim=-1)
-        else:
-            waveform = current[..., cut:]
-        waveform = fit_audio(waveform, round(frames.shape[0] * sr / 24)).clone()
-        return frames, {"waveform": waveform, "sample_rate": sr}, sampled_latent
