@@ -14,17 +14,20 @@
 
 ## 能做什么
 
-插件共 **7 个节点**。在 ComfyUI 中搜索 `H3Kit`，或打开 `H3 Upgrade Kit` 分类就能找到。
+在 ComfyUI 中搜索 `H3Kit`，或打开 `H3 Upgrade Kit` 分类就能找到以下节点。
 
 | 你想做的事 | 使用的节点 |
 | --- | --- |
 | 先低清生成，再放大到高清继续采样 | **H3Kit SelfLift K采样器** |
+| 沿用参考素材，只替换下一段的提示词和长度 | **H3Kit 提示词与长度替换** |
 | 把前后两段视频和音频拼起来 | **H3Kit SelfLift 续接音画拼接** |
 | 单独放大 H3 视频 latent | **H3Kit 3D 潜空间放大** |
 | 对高清画面分块采样 | **H3Kit 高清分块采样** |
 | 让下一段接着上一段的动作生成 | **H3Kit 动作续接** |
 | 裁掉续接时重复的开头，同步音频长度 | **H3Kit 音画同步裁剪** |
 | 分批处理 H3 视频 VAE 解码的小块 | **H3Kit VAE 分块解码** |
+| 将 latent、图片、音频分别循环回传和收集 | **H3Kit Start Loop 多路循环开始** / **H3Kit End Loop 多路循环结束** |
+| 将循环输出的声音列表拼成完整音轨 | **H3Kit 声音列表到声音批次** |
 
 使用本插件不需要另外安装上面三个原插件，也不会修改 ComfyUI 核心文件。
 
@@ -86,6 +89,8 @@ SelfLift 把一次采样分成低清和高清两个阶段：**先在较低分辨
 
 最后将拼接节点的 `images`、`audio` 接到视频保存节点，帧率使用 **24fps**。
 
+拼接节点的 `latent` 原样输出本段采样结果，可接下一段 K采的 `previous_latent`，也可通过多路循环回传。
+
 ### 常用参数
 
 | 参数 | 含义与用法 |
@@ -121,6 +126,50 @@ SelfLift 把一次采样分成低清和高清两个阶段：**先在较低分辨
 </details>
 
 ## 其他节点怎么用
+
+### 提示词与长度替换
+
+放在 **MiniMax H3 参考转视频 → 第二段 SelfLift K采样器** 之间：
+
+| 连接来源 | 连接目标 |
+| --- | --- |
+| 参考转视频的正向 | 本节点 `positive` |
+| 同一个参考转视频的 Latent | 本节点 `latent_image` |
+| 本节点 `positive` | 第二段 K采的 `positive` |
+| 本节点 `latent` | 第二段 K采的 `latent_image` |
+
+在本节点填写新的 `prompt` 和 `length` 即可。长度单位为帧，24fps，沿用 H3 的 `17k+5` 向上对齐规则（124 帧约 5.17 秒）。第一段仍接原参考节点；第二段的 `previous_latent` 仍接前段 K采输出，`negative` 保持原来的连接。
+
+节点沿用原来的 CLIP、视频/音频 VAE、宽高、参考图尺寸设置，以及全部参考图、视频和音频输入。它使用新提示词重新执行原生参考编码，并生成新长度的空白音视频 latent；参考视频仍按原生规则根据新长度裁切。无需额外接 CLIP 或重复连素材，不会修改第一段。
+
+输入必须来自同一个原生参考转视频节点，也可来自同一个本替换节点以继续串联。不要在这两条输入线上插入条件合并、采样或循环回传节点；循环内使用时，从循环外的原参考节点直接接入，提示词和长度可转换为输入由循环提供。
+
+### 多路循环
+
+需要当前 ComfyUI 已提供原生 `Start Loop` / `End Loop` 与循环边界执行支持。搜索 `H3Kit Start Loop`、`H3Kit End Loop`，成对使用。新节点加入后需要重启 ComfyUI 并刷新页面加载端口扩展脚本。
+
+连接一个端口后会自动增加下一个空位，最多 100 路（ComfyUI Autogrow 上限）。各路按编号对应，断开中间一路不会把后面的数据移到前一号端口。
+
+End Loop 的输入按 `output_value`、`next_iteration_value`、`termination` 分组排列，组内按编号排序；新增端口与重新载入工作流时都会保持此顺序。
+
+| 通道用途 | Start Loop 输入 | Start Loop 输出 | End Loop 回传输入 |
+| --- | --- | --- | --- |
+| 上一段 latent | `initial_iteration_value1` | `current_iteration_value1` | `next_iteration_value1` |
+| 上一段图片 | `initial_iteration_value2` | `current_iteration_value2` | `next_iteration_value2` |
+| 上一段音频 | `initial_iteration_value3` | `current_iteration_value3` | `next_iteration_value3` |
+
+将本轮结果分别接入 End Loop 的回传输入。未连接回传的路保留原值。`output_value1`、`output_value2`……是独立的结果收集输入，分别对应 `outputs1`、`outputs2`……，数量不必与回传路数一致，无需创建列表或取列表项来打包、拆包。
+
+- `accumulate=false`：每路输出最后一轮结果。若循环内已用 SelfLift 音画拼接累积完整视频，使用此设置。
+- `accumulate=true`：每路按执行顺序输出自己的 ComfyUI 列表，例如图片列表、音频列表，互不交错。此选项不会自动把帧批次或音频拼成一个对象。
+- 保留 `simple`、`For`、`List` 模式、`parent_iteration` 嵌套、`cache_iterations` 缓存和 `termination` 每轮必执行分支。`termination` 是执行依赖，不是提前退出条件。
+- 次数为 0 时各路输出空列表；不要在同一对循环边界混用 H3Kit 和原生节点。
+
+### 声音列表到声音批次
+
+连接：**End Loop 的音频 `outputsN` → 本节点 `audio` → Video Combine 的音频输入**。节点一次接收整个列表，沿时间维按轮次顺序拼成一条完整音轨，与“图像列表到图像批次”后的画面配合使用。
+
+不同采样率统一到最高采样率，单声道与双声道混用时自动复制单声道；每段原有时长保留，不混音、不自动去重。End Loop 应收集每轮新增片段，已累积成完整音轨的结果直接使用最后一轮即可。
 
 ### 3D 潜空间放大
 

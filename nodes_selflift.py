@@ -93,11 +93,11 @@ class H3KitSelfLiftAVJoin:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "AUDIO")
-    RETURN_NAMES = ("images", "audio")
+    RETURN_TYPES = ("IMAGE", "AUDIO", "LATENT")
+    RETURN_NAMES = ("images", "audio", "latent")
     FUNCTION = "join"
     CATEGORY = "H3 Upgrade Kit/视频续接"
-    DESCRIPTION = "裁掉17帧整数倍的重复前缀，保留本段原定新增帧数；启用 Soft AV 时用后段过渡音频替换前段对应尾音。按24fps对齐音频长度。"
+    DESCRIPTION = "裁掉17帧整数倍的重复前缀，保留本段原定新增帧数；启用 Soft AV 时用后段过渡音频替换前段对应尾音。按24fps对齐音频长度。latent 原样输出本段 sampled_latent，可接下一段 K采的 previous_latent。"
 
     def join(self, sampled_latent, decoded_frames, decoded_audio=None, previous_frames=None, previous_audio=None):
         info = sampled_latent.get(SEGMENT)
@@ -121,7 +121,7 @@ class H3KitSelfLiftAVJoin:
                 raise ValueError("前段画面短于重叠区。")
             frames = torch.cat((previous_frames, frames.to(previous_frames)), dim=0)
         if decoded_audio is None and previous_audio is None:
-            return frames, None
+            return frames, None, sampled_latent
         source = decoded_audio if decoded_audio is not None else previous_audio
         sr = source["sample_rate"]
         template = source["waveform"]
@@ -148,4 +148,4 @@ class H3KitSelfLiftAVJoin:
         else:
             waveform = current[..., cut:]
         waveform = fit_audio(waveform, round(frames.shape[0] * sr / 24)).clone()
-        return frames, {"waveform": waveform, "sample_rate": sr}
+        return frames, {"waveform": waveform, "sample_rate": sr}, sampled_latent

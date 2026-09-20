@@ -1,5 +1,9 @@
 # 来源及修改
 
+## 多路循环（2026-09-20）
+
+`nodes_loop.py` 的循环展开与逐轮执行逻辑改编自 ComfyUI `comfy_extras/nodes_loop.py`，沿用 GPL-3.0 许可。复用原生循环边界、模式、缓存和进度机制，新增独立编号的数据回传与输出；`web/loops.js` 配合原生 Autogrow 整理输入分组并同步显示输出端口。无需 Easy Use 等外部循环插件。
+
 ## SelfLift 续接采样（2026-09-18）
 
 `selflift_sampling.py` 的渐进分辨率交接、双分辨率上下文、动态 Drift-Control、Soft AV、升采样时间边界和前缀偏差校正改编自 [Songssx/ComfyUI-MiniMaxH3-TimelineDirector](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector)，提交 `03915aae320d186f1498d12a847689af0902785d` 的 `selflift_runtime/`、`drift_control_av.py` 和 `experimental_latent_guide.py`，遵循其 GPL-3.0 许可，完整许可见本目录 `LICENSE`。
