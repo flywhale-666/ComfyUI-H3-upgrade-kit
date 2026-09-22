@@ -112,8 +112,8 @@
           "type": "INT",
           "links": [
             251,
-            329,
-            448
+            448,
+            329
           ]
         },
         {
@@ -366,13 +366,13 @@
           "localized_name": "mask",
           "name": "mask",
           "type": "MASK",
-          "links": null
+          "links": []
         },
         {
           "localized_name": "original_size",
           "name": "original_size",
           "type": "BOX",
-          "links": null
+          "links": []
         },
         {
           "localized_name": "width",
@@ -463,7 +463,7 @@
           "localized_name": "遮罩",
           "name": "MASK",
           "type": "MASK",
-          "links": null
+          "links": []
         }
       ],
       "properties": {
@@ -662,13 +662,13 @@
           "localized_name": "SEED",
           "name": "SEED",
           "type": "INT",
-          "links": null
+          "links": []
         },
         {
           "localized_name": "Reserved(GB)",
           "name": "Reserved(GB)",
           "type": "FLOAT",
-          "links": null
+          "links": []
         }
       ],
       "properties": {
@@ -1420,7 +1420,7 @@
           "localized_name": "audio_latent",
           "name": "audio_latent",
           "type": "LATENT",
-          "links": null
+          "links": []
         }
       ],
       "properties": {
@@ -1524,9 +1524,9 @@
           "type": "VAE",
           "links": [
             263,
-            322,
             384,
-            538
+            538,
+            322
           ]
         }
       ],
@@ -1684,10 +1684,10 @@
           "type": "VAE",
           "links": [
             262,
-            324,
             351,
             359,
-            387
+            387,
+            324
           ]
         }
       ],
@@ -1993,7 +1993,7 @@
           "localized_name": "文件名",
           "name": "Filenames",
           "type": "VHS_FILENAMES",
-          "links": null
+          "links": []
         }
       ],
       "properties": {
@@ -2287,7 +2287,7 @@
           "localized_name": "文件名",
           "name": "Filenames",
           "type": "VHS_FILENAMES",
-          "links": null
+          "links": []
         }
       ],
       "properties": {
@@ -2418,21 +2418,21 @@
           "localized_name": "sample_rate",
           "name": "sample_rate",
           "type": "INT",
-          "links": null
+          "links": []
         },
         {
           "localized_name": "channels",
           "name": "channels",
           "type": "INT",
-          "links": null
+          "links": []
         },
         {
           "localized_name": "duration",
           "name": "duration",
           "type": "FLOAT",
           "links": [
-            484,
-            513
+            513,
+            484
           ]
         }
       ],
@@ -2536,13 +2536,13 @@
           "localized_name": "sample_rate",
           "name": "sample_rate",
           "type": "INT",
-          "links": null
+          "links": []
         },
         {
           "localized_name": "channels",
           "name": "channels",
           "type": "INT",
-          "links": null
+          "links": []
         },
         {
           "localized_name": "duration",
@@ -2723,13 +2723,13 @@
           "localized_name": "sample_rate",
           "name": "sample_rate",
           "type": "INT",
-          "links": null
+          "links": []
         },
         {
           "localized_name": "channels",
           "name": "channels",
           "type": "INT",
-          "links": null
+          "links": []
         },
         {
           "localized_name": "duration",
@@ -3227,7 +3227,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.10",
+        "ver": "0.0.11",
         "Node name for S&R": "H3KitReferencePromptLength"
       },
       "widgets_values": [
@@ -3379,12 +3379,18 @@
       ],
       "size": [
         270,
-        182
+        170
       ],
       "flags": {},
       "order": 45,
       "mode": 0,
       "inputs": [
+        {
+          "localized_name": "sampled_latent",
+          "name": "sampled_latent",
+          "type": "LATENT",
+          "link": 533
+        },
         {
           "localized_name": "decoded_frames",
           "name": "decoded_frames",
@@ -3394,47 +3400,23 @@
         {
           "localized_name": "decoded_audio",
           "name": "decoded_audio",
-          "shape": 7,
           "type": "AUDIO",
-          "link": 500
-        },
-        {
-          "localized_name": "sampled_latent",
-          "name": "sampled_latent",
-          "shape": 7,
-          "type": "LATENT",
-          "link": 533
+          "link": 500,
+          "shape": 7
         },
         {
           "localized_name": "previous_frames",
           "name": "previous_frames",
-          "shape": 7,
           "type": "IMAGE",
-          "link": null
+          "link": null,
+          "shape": 7
         },
         {
           "localized_name": "previous_audio",
           "name": "previous_audio",
-          "shape": 7,
           "type": "AUDIO",
-          "link": null
-        },
-        {
-          "localized_name": "delivery_frames",
-          "name": "delivery_frames",
-          "shape": 7,
-          "type": "INT",
-          "link": null
-        },
-        {
-          "localized_name": "prefix_frames",
-          "name": "prefix_frames",
-          "shape": 7,
-          "type": "INT",
-          "widget": {
-            "name": "prefix_frames"
-          },
-          "link": null
+          "link": null,
+          "shape": 7
         }
       ],
       "outputs": [
@@ -3459,20 +3441,16 @@
           "localized_name": "latent",
           "name": "latent",
           "type": "LATENT",
-          "links": null
+          "links": []
         }
       ],
       "properties": {
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.10",
+        "ver": "0.0.11",
         "Node name for S&R": "H3KitAVJoin"
       },
-      "widgets_values": [
-        0
-      ],
-      "widgets_values_named": {
-        "prefix_frames": 0
-      }
+      "widgets_values": [],
+      "widgets_values_named": {}
     },
     {
       "id": 249,
@@ -3581,15 +3559,15 @@
           "name": "prompt",
           "type": "STRING",
           "links": [
-            515,
-            516
+            516,
+            515
           ]
         },
         {
           "localized_name": "show_help",
           "name": "show_help",
           "type": "STRING",
-          "links": null
+          "links": []
         }
       ],
       "title": "提示词文本",
@@ -3614,7 +3592,7 @@
       ],
       "size": [
         286.58984375,
-        722
+        522
       ],
       "flags": {},
       "order": 36,
@@ -3643,34 +3621,6 @@
           "name": "latent_image",
           "type": "LATENT",
           "link": 535
-        },
-        {
-          "localized_name": "previous_latent",
-          "name": "previous_latent",
-          "shape": 7,
-          "type": "LATENT",
-          "link": null
-        },
-        {
-          "localized_name": "sigmas",
-          "name": "sigmas",
-          "shape": 7,
-          "type": "SIGMAS",
-          "link": null
-        },
-        {
-          "localized_name": "context_vae",
-          "name": "context_vae",
-          "shape": 7,
-          "type": "VAE",
-          "link": null
-        },
-        {
-          "localized_name": "previous_frames",
-          "name": "previous_frames",
-          "shape": 7,
-          "type": "IMAGE",
-          "link": null
         },
         {
           "localized_name": "seed",
@@ -3754,15 +3704,6 @@
           "link": null
         },
         {
-          "localized_name": "overlap_frames",
-          "name": "overlap_frames",
-          "type": "INT",
-          "widget": {
-            "name": "overlap_frames"
-          },
-          "link": null
-        },
-        {
           "localized_name": "continue_audio",
           "name": "continue_audio",
           "type": "BOOLEAN",
@@ -3772,24 +3713,61 @@
           "link": null
         },
         {
+          "localized_name": "previous_latent",
+          "name": "previous_latent",
+          "type": "LATENT",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "localized_name": "sigmas",
+          "name": "sigmas",
+          "type": "SIGMAS",
+          "link": null,
+          "shape": 7
+        },
+        {
           "localized_name": "spatial_tiles",
           "name": "spatial_tiles",
-          "shape": 7,
           "type": "BOOLEAN",
           "widget": {
             "name": "spatial_tiles"
           },
-          "link": null
+          "link": null,
+          "shape": 7
         },
         {
           "localized_name": "minimum_tiles",
           "name": "minimum_tiles",
-          "shape": 7,
           "type": "INT",
           "widget": {
             "name": "minimum_tiles"
           },
-          "link": null
+          "link": null,
+          "shape": 7
+        },
+        {
+          "localized_name": "context_vae",
+          "name": "context_vae",
+          "type": "VAE",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "localized_name": "previous_frames",
+          "name": "previous_frames",
+          "type": "IMAGE",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "boundary_check",
+          "type": "BOOLEAN",
+          "link": null,
+          "shape": 7,
+          "widget": {
+            "name": "boundary_check"
+          }
         }
       ],
       "outputs": [
@@ -3806,7 +3784,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.10",
+        "ver": "0.0.11",
         "Node name for S&R": "H3KitSelfLiftSampler"
       },
       "widgets_values": [
@@ -3820,10 +3798,10 @@
         2,
         0.5,
         "minimax_h3_latent_upscaler_3d_bf16.safetensors",
-        17,
         true,
         true,
-        4
+        4,
+        false
       ],
       "widgets_values_named": {
         "seed": 308987927341206,
@@ -3836,10 +3814,10 @@
         "high_resolution_steps": 2,
         "lowres_scale": 0.5,
         "upscale_weights": "minimax_h3_latent_upscaler_3d_bf16.safetensors",
-        "overlap_frames": 17,
         "continue_audio": true,
         "spatial_tiles": true,
-        "minimum_tiles": 4
+        "minimum_tiles": 4,
+        "boundary_check": false
       }
     },
     {
@@ -3890,7 +3868,7 @@
       ],
       "size": [
         286.58984375,
-        722
+        522
       ],
       "flags": {},
       "order": 42,
@@ -3919,34 +3897,6 @@
           "name": "latent_image",
           "type": "LATENT",
           "link": 534
-        },
-        {
-          "localized_name": "previous_latent",
-          "name": "previous_latent",
-          "shape": 7,
-          "type": "LATENT",
-          "link": 536
-        },
-        {
-          "localized_name": "sigmas",
-          "name": "sigmas",
-          "shape": 7,
-          "type": "SIGMAS",
-          "link": null
-        },
-        {
-          "localized_name": "context_vae",
-          "name": "context_vae",
-          "shape": 7,
-          "type": "VAE",
-          "link": 538
-        },
-        {
-          "localized_name": "previous_frames",
-          "name": "previous_frames",
-          "shape": 7,
-          "type": "IMAGE",
-          "link": 537
         },
         {
           "localized_name": "seed",
@@ -4030,15 +3980,6 @@
           "link": null
         },
         {
-          "localized_name": "overlap_frames",
-          "name": "overlap_frames",
-          "type": "INT",
-          "widget": {
-            "name": "overlap_frames"
-          },
-          "link": null
-        },
-        {
           "localized_name": "continue_audio",
           "name": "continue_audio",
           "type": "BOOLEAN",
@@ -4048,24 +3989,61 @@
           "link": null
         },
         {
+          "localized_name": "previous_latent",
+          "name": "previous_latent",
+          "type": "LATENT",
+          "link": 536,
+          "shape": 7
+        },
+        {
+          "localized_name": "sigmas",
+          "name": "sigmas",
+          "type": "SIGMAS",
+          "link": null,
+          "shape": 7
+        },
+        {
           "localized_name": "spatial_tiles",
           "name": "spatial_tiles",
-          "shape": 7,
           "type": "BOOLEAN",
           "widget": {
             "name": "spatial_tiles"
           },
-          "link": null
+          "link": null,
+          "shape": 7
         },
         {
           "localized_name": "minimum_tiles",
           "name": "minimum_tiles",
-          "shape": 7,
           "type": "INT",
           "widget": {
             "name": "minimum_tiles"
           },
-          "link": null
+          "link": null,
+          "shape": 7
+        },
+        {
+          "localized_name": "context_vae",
+          "name": "context_vae",
+          "type": "VAE",
+          "link": 538,
+          "shape": 7
+        },
+        {
+          "localized_name": "previous_frames",
+          "name": "previous_frames",
+          "type": "IMAGE",
+          "link": 537,
+          "shape": 7
+        },
+        {
+          "name": "boundary_check",
+          "type": "BOOLEAN",
+          "link": null,
+          "shape": 7,
+          "widget": {
+            "name": "boundary_check"
+          }
         }
       ],
       "outputs": [
@@ -4082,7 +4060,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.10",
+        "ver": "0.0.11",
         "Node name for S&R": "H3KitSelfLiftSampler"
       },
       "widgets_values": [
@@ -4096,10 +4074,10 @@
         2,
         0.5,
         "minimax_h3_latent_upscaler_3d_bf16.safetensors",
-        17,
         true,
         true,
-        4
+        4,
+        true
       ],
       "widgets_values_named": {
         "seed": 542521936465683,
@@ -4112,10 +4090,10 @@
         "high_resolution_steps": 2,
         "lowres_scale": 0.5,
         "upscale_weights": "minimax_h3_latent_upscaler_3d_bf16.safetensors",
-        "overlap_frames": 17,
         "continue_audio": true,
         "spatial_tiles": true,
-        "minimum_tiles": 4
+        "minimum_tiles": 4,
+        "boundary_check": true
       }
     }
   ],
@@ -4445,7 +4423,7 @@
       195,
       0,
       246,
-      0,
+      1,
       "IMAGE"
     ],
     [
@@ -4453,7 +4431,7 @@
       200,
       0,
       246,
-      1,
+      2,
       "AUDIO"
     ],
     [
@@ -4597,7 +4575,7 @@
       254,
       0,
       246,
-      2,
+      0,
       "LATENT"
     ],
     [
@@ -4621,7 +4599,7 @@
       252,
       0,
       254,
-      4,
+      14,
       "LATENT"
     ],
     [
@@ -4629,7 +4607,7 @@
       124,
       0,
       254,
-      7,
+      19,
       "IMAGE"
     ],
     [
@@ -4637,7 +4615,7 @@
       147,
       0,
       254,
-      6,
+      18,
       "VAE"
     ],
     [

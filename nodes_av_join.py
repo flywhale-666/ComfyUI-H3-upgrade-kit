@@ -16,17 +16,13 @@ class H3KitAVJoin:
     def INPUT_TYPES(cls):
         return {
             "required": {
+                "sampled_latent": ("LATENT", {"tooltip": "本段采样输出，用于自动读取22帧续接裁剪信息。"}),
                 "decoded_frames": ("IMAGE", {"tooltip": "本段未经裁剪的完整解码画面。"}),
             },
             "optional": {
                 "decoded_audio": ("AUDIO",),
-                "sampled_latent": ("LATENT", {"tooltip": "普通采样可不接，按 prefix_frames / delivery_frames 裁剪；SelfLift 请接原始输出以自动读取续接信息。连接时原样输出 latent，不连接时 latent 输出为空。"}),
                 "previous_frames": ("IMAGE", {"tooltip": "可选：前段完整或累积画面。连接后自动拼接；不接则只裁剪本段。"}),
                 "previous_audio": ("AUDIO", {"tooltip": "与 previous_frames 对应的音频。"}),
-                "prefix_frames": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 17,
-                    "tooltip": "普通采样接动作续接的 prefix_frames / trim_frames，或按实际上下文填写 17、34、51……；首段为 0。SelfLift 自动读取。"}),
-                "delivery_frames": ("INT", {"default": 0, "min": 0, "max": 100000, "forceInput": True,
-                    "tooltip": "可接动作续接的 delivery_frames，去除多余尾帧；0 保留裁掉前缀后的全部画面。SelfLift 自动读取。"}),
             },
         }
 
@@ -36,13 +32,12 @@ class H3KitAVJoin:
     CATEGORY = "H3 Upgrade Kit/视频续接"
     DESCRIPTION = "统一裁剪重复前缀并自动对齐音频尾部；接入前段音画时自动拼接。兼容普通高级采样器和 SelfLift，保留 SelfLift 音频过渡。latent 原样输出本段采样结果。"
 
-    def join(self, sampled_latent=None, decoded_frames=None, decoded_audio=None, previous_frames=None,
-             previous_audio=None, prefix_frames=0, delivery_frames=0):
+    def join(self, sampled_latent, decoded_frames, decoded_audio=None, previous_frames=None,
+             previous_audio=None):
         frame_rate = 24.0
         total = int(decoded_frames.shape[0])
-        info = sampled_latent.get("h3kit_selflift_segment") if sampled_latent is not None else None
-        overlap = max(0, int(prefix_frames))
-        delivery = int(delivery_frames) or total - overlap
+        info = sampled_latent.get("h3kit_selflift_segment")
+        delivery, overlap = sampled_latent.get("h3kit_motion_length", (total, 0))
         soft_audio = False
         if info is not None:
             if total != info["frames"]:
@@ -53,11 +48,13 @@ class H3KitAVJoin:
             soft_audio = info["soft_audio"]
             if previous_frames is not None and not overlap:
                 raise ValueError("本段未接入前段 latent；SelfLift 续接请先连接 K采的 previous_latent。")
+        if overlap not in (0, 22) or overlap + delivery != total:
+            raise ValueError("续接信息与完整解码帧数不符；请用固定22帧节点重新生成。")
         if frame_rate <= 0:
             raise ValueError("采样 latent 中记录的帧率必须大于 0。")
         end = overlap + delivery
         if delivery <= 0 or end > total:
-            raise ValueError("裁剪帧数超出本段画面长度，请检查 prefix_frames 和 delivery_frames。")
+            raise ValueError("裁剪帧数超出本段画面长度，请检查本段采样输出与解码画面是否对应。")
         joined = previous_frames is not None
         if previous_audio is not None and not joined:
             raise ValueError("previous_audio 需要匹配的 previous_frames。")

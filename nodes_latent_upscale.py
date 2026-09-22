@@ -600,6 +600,4 @@ class H3KitLatentUpscale3D(io.ComfyNode):
             mask = comfy.utils.reshape_mask(source_latent["noise_mask"], source_samples.shape)
             output["noise_mask"] = F.interpolate(
                 mask.to(device="cpu"), size=upscaled_samples.shape[2:], mode="nearest")
-        if "h3kit_motion_length" in source_latent:
-            output["h3kit_upscaled_motion"] = True
         return io.NodeOutput(output)

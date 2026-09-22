@@ -17,11 +17,19 @@ function sortInputs(node, layout) {
         return a.name.localeCompare(b.name, undefined, { numeric: true });
     });
     if (sorted.every((input, index) => input === node.inputs[index])) return false;
-    // 移动原槽位对象，并更新连线目标；端口名称和数据通道编号保持不变。
+    // 新版 input.link 按当前槽位查询，必须在重排前保存连线归属。
+    const links = new Map(node.inputs.map((input, index) => [input, node.getInputLink(index)]));
+    const moved = sorted.flatMap((input, index) => {
+        const link = links.get(input);
+        return link && link.target_slot !== index ? [{ link, index }] : [];
+    });
+    // 先移到空槽位，避免逐条更新时与尚未移动的连线争用目标槽位。
+    for (const [temporary, { link }] of moved.entries()) {
+        link.target_slot = node.inputs.length + temporary;
+    }
     node.inputs.splice(0, node.inputs.length, ...sorted);
-    for (const [index, input] of node.inputs.entries()) {
-        const link = input.link != null ? node.graph?.links[input.link] : null;
-        if (link) link.target_slot = index;
+    for (const { link, index } of moved) {
+        link.target_slot = index;
     }
     return true;
 }
@@ -70,6 +78,18 @@ app.registerExtension({
     async beforeRegisterNodeDef(nodeType, nodeData) {
         const layout = layouts[nodeData.name];
         if (!layout) return;
+        if (nodeData.name === "H3KitStartLoop") {
+            const addCustomWidget = nodeType.prototype.addCustomWidget;
+            nodeType.prototype.addCustomWidget = function (widget, ...args) {
+                if (widget.type === "progressText") {
+                    widget.props = {
+                        ...widget.props,
+                        style: [widget.props?.style, { color: "#e5e7eb" }],
+                    };
+                }
+                return addCustomWidget.call(this, widget, ...args);
+            };
+        }
         function scheduleSync() {
             if (this._h3kitLoopSyncPending) return;
             this._h3kitLoopSyncPending = true;
