@@ -15,7 +15,7 @@ class H3KitSelfLiftSampler:
                 "model": ("MODEL",),
                 "positive": ("CONDITIONING",),
                 "negative": ("CONDITIONING",),
-                "latent_image": ("LATENT", {"tooltip": "本段目标高清 H3 音视频 latent。续接固定22帧上下文，新增长度按模型周期对齐；124帧目标交付119帧新画面。所有段长采用相同续接规则，按实际窗口采样。"}),
+                "latent_image": ("LATENT", {"tooltip": "本段目标高清H3音视频latent；支持动作续接输出的target_latent，此时positive也接动作续接输出，previous_latent留空。自动继承22帧前缀；124帧目标交付119帧新画面。"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": True}),
                 "steps": ("INT", {"default": 8, "min": 2, "max": 10000}),
                 "cfg": ("FLOAT", {"default": 1.0, "min": 0, "max": 100, "step": 0.1}),
@@ -30,18 +30,18 @@ class H3KitSelfLiftSampler:
                     "tooltip": "低清宽高比例。前后段须使用相同设置；高清直接传原始latent，开启边界检查时低清按最终高清画面做局部空间校准。"}),
                 "upscale_weights": (list_upscale_weights(),),
                 "continue_audio": ("BOOLEAN", {"default": True,
-                    "tooltip": "续接前段尾音，最后 8 个音频 token 平滑释放。已锁定的输入音轨优先。"}),
+                    "tooltip": "直接串联SelfLift时续接前段尾音，最后8个音频token平滑释放。动作续接输入的音频条件和遮罩由上游决定。"}),
             },
             "optional": {
-                "previous_latent": ("LATENT", {"tooltip": "直接接前一个 H3Kit SelfLift K采的 sampled_latent；同时携带低清和高清状态。"}),
+                "previous_latent": ("LATENT", {"tooltip": "仅用于直接串联前一个SelfLift的sampled_latent，保留低清和高清状态。外部视频或普通K采经动作续接接入latent_image时，此处留空。"}),
                 "sigmas": ("SIGMAS", {"tooltip": "可选外部调度；连接后取代 steps/scheduler/denoise，总步数和降噪强度由外部调度决定。"}),
                 "spatial_tiles": ("BOOLEAN", {"default": False,
                     "label_on": "高清采样分块：开启", "label_off": "高清采样分块：关闭",
                     "tooltip": "仅对 SelfLift 高清采样阶段沿长边重叠分块，支持视频/音频遮罩及固定上下文续接。不影响 latent 放大或 VAE 解码。"}),
                 "minimum_tiles": ("INT", {"default": 4, "min": 2, "max": 8,
                     "tooltip": "高清采样的最少分块数，按显存预算增加到最多 8 块；小画面受网格限制可能更少。音频取第一块预测，不支持 ControlNet。"}),
-                "context_vae": ("VAE", {"tooltip": "用于边界检查及低清上下文空间校准，高清原始latent不变。不连接时关闭boundary_check。"}),
-                "previous_frames": ("IMAGE", {"tooltip": "可选：前段实际解码画面，配合context_vae避免再次解码高清前段；不连接则自动解码。"}),
+                "context_vae": ("VAE", {"tooltip": "H3视频VAE。动作续接→SelfLift的视频续接必须连接，否则采样前报错；已接previous_frames或关闭boundary_check也不能省略。用于缩小图片后编码低清上下文。纯音频路径不需要；原来的SelfLift直连仍按boundary_check决定是否需要。"}),
+                "previous_frames": ("IMAGE", {"tooltip": "连接与前段latent对应的完整画面或末尾22帧。动作续接输入时，直接缩小这些图片并用context_vae编码低清上下文，省去高清解码；不连接则自动解码。SelfLift直连时仍用于原来的边界检查。"}),
                 "boundary_check": ("BOOLEAN", {"default": True,
                     "tooltip": "检查22帧上下文；以最终高清画面校准低清空间差异，仅接受局部误差改善的候选。关闭则不检查、不校准。需要context_vae。"}),
             },
@@ -51,7 +51,7 @@ class H3KitSelfLiftSampler:
     RETURN_NAMES = ("sampled_latent",)
     FUNCTION = "sample"
     CATEGORY = "H3 Upgrade Kit/采样"
-    DESCRIPTION = "低清采样→学习型latent放大→高清续采。所有段长统一采用22帧原生上下文，低清和高清阶段分别继承并锁定前缀。解码后接音画裁剪与拼接去除重复前缀。"
+    DESCRIPTION = "低清采样→学习型latent放大→高清续采。支持直接串联SelfLift，或接收动作续接已准备的22帧上下文；后者不需要前段SelfLift，previous_latent留空。解码后接音画裁剪与拼接去除重复前缀。"
 
     def sample(self, model, positive, negative, latent_image, seed, steps, cfg, scheduler,
                high_resolution_steps, lowres_scale, upscale_weights,

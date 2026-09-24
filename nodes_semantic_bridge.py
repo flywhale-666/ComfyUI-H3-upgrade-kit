@@ -141,7 +141,8 @@ class H3KitSemanticBridge:
         return True
 
     @classmethod
-    def IS_CHANGED(cls, adapter, enabled, alpha):
+    def IS_CHANGED(cls, adapter, enabled, alpha, **kwargs):
+        # 执行器会传入全部输入；普通参数和上游变化已由 ComfyUI 纳入缓存键。
         if not enabled or alpha == 0:
             return "disabled"
         path = adapter_path(adapter)

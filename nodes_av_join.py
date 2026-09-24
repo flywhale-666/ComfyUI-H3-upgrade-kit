@@ -47,7 +47,7 @@ class H3KitAVJoin:
             frame_rate = info["fps"]
             soft_audio = info["soft_audio"]
             if previous_frames is not None and not overlap:
-                raise ValueError("本段未接入前段 latent；SelfLift 续接请先连接 K采的 previous_latent。")
+                raise ValueError("本段没有续接前缀；请将动作续接的条件和target_latent接入SelfLift，或将前一个SelfLift输出接入previous_latent。")
         if overlap not in (0, 22) or overlap + delivery != total:
             raise ValueError("续接信息与完整解码帧数不符；请用固定22帧节点重新生成。")
         if frame_rate <= 0:

@@ -5,6 +5,7 @@ import logging
 
 import torch
 import torch.nn.functional as F
+import torchaudio.functional
 
 import comfy.nested_tensor
 import comfy.utils
@@ -100,6 +101,43 @@ def previous_audio_tail(latent, frames=24):
     return audio[:1, ..., total-ticks:total].clone(), ticks, overhang
 
 
+def encode_frame_tail(frames, vae, video):
+    if vae is None:
+        raise ValueError('图片帧续接需要连接H3视频VAE到video_vae。')
+    if frames.shape[0] == 0:
+        raise ValueError('previous_frames没有图片帧。')
+    frames = frames[-CONTEXT_FRAMES:, ..., :3]
+    if len(frames) < CONTEXT_FRAMES:
+        frames = torch.cat((frames[:1].expand(CONTEXT_FRAMES-len(frames), -1, -1, -1), frames))
+    size = (video.shape[-2]*16, video.shape[-1]*16)
+    if tuple(frames.shape[1:3]) != size:
+        frames = F.interpolate(frames.movedim(-1, 1), size=size, mode='area').movedim(1, -1)
+    reference = vae.encode(frames)
+    if tuple(reference.shape) != (1, video.shape[1], CONTEXT_TOKENS, *video.shape[-2:]):
+        raise ValueError('图片帧续接需要22帧编码为7个时间步的H3视频VAE。')
+    return reference
+
+
+def encode_audio_tail(audio, vae):
+    if vae is None:
+        raise ValueError('音频续接需要连接H3音频VAE到audio_vae。')
+    waveform, sr = audio['waveform'], audio['sample_rate']
+    if waveform.shape[-1] == 0:
+        raise ValueError('previous_audio没有音频采样。')
+    length = round(CONTEXT_FRAMES * sr / H3KIT_NATIVE_FPS)
+    waveform = waveform[:1, ..., -length:]
+    waveform = F.pad(waveform, (length-waveform.shape[-1], 0))
+    if sr != vae.audio_sample_rate:
+        waveform = torchaudio.functional.resample(waveform, sr, vae.audio_sample_rate)
+    ticks = round(CONTEXT_FRAMES * H3KIT_AUDIO_FRAME_SCALE)
+    # 对齐800采样点的H3音频网格，避免通用VAE包装层居中裁掉尾音。
+    waveform = F.pad(waveform, (0, ticks*800-waveform.shape[-1]))
+    reference = vae.encode(waveform.movedim(1, -1))
+    if tuple(reference.shape) != (1, 32, 2, ticks):
+        raise ValueError('音频续接需要H3音频VAE，将22帧时长编码为37个音频时间步。')
+    return reference
+
+
 class H3KitMotionBridge:
     @classmethod
     def INPUT_TYPES(cls):
@@ -108,42 +146,54 @@ class H3KitMotionBridge:
                     'target_latent': ('LATENT',),
                 },
                 'optional': {
-                    'previous_latent': ('LATENT', {'tooltip':'前段同分辨率H3音视频latent；固定继承末尾22帧。首段不连接。'}),
-                    'video_vae': ('VAE', {'tooltip':'边界检查使用；低清阶段另用局部编码差值校准上下文，高清原始latent不变。'}),
-                    'previous_frames': ('IMAGE', {'tooltip':'连接上一段最终高清解码画面或连续22张尾帧；低清和高清两处都接同一画面，不要提前缩小。'}),
-                    'boundary_check': ('BOOLEAN', {'default':True,'tooltip':'检查22帧边界；图片大于当前latent分辨率时校准低清空间差异，仅接受局部误差改善的候选。关闭则不检查、不校准。'}),
+                    'previous_latent': ('LATENT', {'tooltip':'优先使用前段同分辨率H3音视频latent，保持原生续接；接入后忽略previous_audio，图片仍用于边界检查。'}),
+                    'video_vae': ('VAE', {'tooltip':'无previous_latent时用于编码图片尾帧，必须连接H3视频VAE。latent路径用于边界检查及低清校准，高清原始latent不变。'}),
+                    'previous_frames': ('IMAGE', {'tooltip':'无previous_latent时编码末尾22帧；不足22帧在开头重复首帧补齐，单图按静止上下文处理。自动缩放到目标尺寸。有latent时仍用于原来的边界检查。'}),
+                    'boundary_check': ('BOOLEAN', {'default':True,'tooltip':'仅用于latent路径的22帧边界检查与低清校准。关闭不影响图片和音频输入所需的VAE编码。'}),
+                    'previous_audio': ('AUDIO', {'tooltip':'无previous_latent时使用音频末尾22/24秒；短音频在开头补静音。可单独接入或配合图片，音画应对齐同一结束时刻。'}),
+                    'audio_vae': ('VAE', {'tooltip':'previous_audio使用的H3音频VAE；仅在无previous_latent且接入音频时需要。'}),
                 }}
 
     RETURN_TYPES = ('CONDITIONING','INT','LATENT','INT')
     RETURN_NAMES = ('positive_conditioning','prefix_frames','target_latent','delivery_frames')
     FUNCTION = 'bridge_motion'
     CATEGORY = 'H3 Upgrade Kit/视频续接'
-    DESCRIPTION = '统一22帧原生续接，继承7个latent时间步。请求124帧时续段交付119帧；音频分段须按delivery_frames推进。背景结构连续性仍有已知限制。'
+    DESCRIPTION = '优先保留原生latent续接；也支持图片、图片加音频、纯音频尾部续接。统一22帧上下文，按24fps解释输入；纯音频不锁定画面。请求124帧时交付119新帧，解码后用音画裁剪与拼接去除前22帧。'
 
     def bridge_motion(self, positive_conditioning, target_latent, previous_latent=None,
-                      video_vae=None, previous_frames=None, boundary_check=True):
-        if previous_latent is None:
+                      video_vae=None, previous_frames=None, boundary_check=True,
+                      previous_audio=None, audio_vae=None):
+        if previous_latent is None and previous_frames is None and previous_audio is None:
             return positive_conditioning, 0, target_latent, pixel_frames(video_stream(target_latent).shape[2])
         ensure_motion_layout('22-frame native continuation')
         video = video_stream(target_latent)
-        source = video_stream(previous_latent)
-        if source.shape[:2] != video.shape[:2] or source.shape[-2:] != video.shape[-2:]:
-            raise ValueError('前后段视频latent的批次、通道和分辨率须一致。')
-        # 普通两阶段链路在两处都接最终高清画面，以实际尺寸识别低清阶段。
-        # 不根据模型连接或已删除的放大标记猜测，也不修改同分辨率的高清上下文。
-        low_stage = (previous_frames is not None
-                     and previous_frames.shape[1] >= source.shape[-2] * 16
-                     and previous_frames.shape[2] >= source.shape[-1] * 16
-                     and tuple(previous_frames.shape[1:3]) != (source.shape[-2] * 16, source.shape[-1] * 16))
-        reference, _ = native_video_tail(source, video_vae, previous_frames, boundary_check,
-                                        align_to_frames=low_stage)
+        reference = audio_guide = None
+        if previous_latent is not None:
+            source = video_stream(previous_latent)
+            if source.shape[:2] != video.shape[:2] or source.shape[-2:] != video.shape[-2:]:
+                raise ValueError('前后段视频latent的批次、通道和分辨率须一致。')
+            # 普通两阶段链路在两处都接最终高清画面，以实际尺寸识别低清阶段。
+            # 不根据模型连接或已删除的放大标记猜测，也不修改同分辨率的高清上下文。
+            low_stage = (previous_frames is not None
+                         and previous_frames.shape[1] >= source.shape[-2] * 16
+                         and previous_frames.shape[2] >= source.shape[-1] * 16
+                         and tuple(previous_frames.shape[1:3]) != (source.shape[-2] * 16, source.shape[-1] * 16))
+            reference, _ = native_video_tail(source, video_vae, previous_frames, boundary_check,
+                                            align_to_frames=low_stage)
+            audio, ticks, overhang = previous_audio_tail(previous_latent)
+            end_coord = round(CONTEXT_FRAMES * H3KIT_AUDIO_FRAME_SCALE + overhang)
+            audio_guide = {'resolved_frame_index':end_coord/H3KIT_AUDIO_FRAME_SCALE-ticks/H3KIT_AUDIO_FRAME_SCALE,
+                           'audio_latent':audio, 'h3kit_motion':True}
+        else:
+            if previous_frames is not None:
+                reference = encode_frame_tail(previous_frames, video_vae, video)
+            if previous_audio is not None:
+                audio_guide = {'resolved_frame_index':0, 'audio_latent':encode_audio_tail(previous_audio, audio_vae),
+                               'h3kit_motion':True}
         target_latent, delivery = reserve_motion_prefix(target_latent)
-        target_latent = lock_motion_prefix(target_latent, reference)
+        if reference is not None:
+            target_latent = lock_motion_prefix(target_latent, reference)
         total = pixel_frames(video_stream(target_latent).shape[2])
-        audio, ticks, overhang = previous_audio_tail(previous_latent)
-        end_coord = round(CONTEXT_FRAMES * H3KIT_AUDIO_FRAME_SCALE + overhang)
-        audio_guide = {'resolved_frame_index':end_coord/H3KIT_AUDIO_FRAME_SCALE-ticks/H3KIT_AUDIO_FRAME_SCALE,
-                       'audio_latent':audio, 'h3kit_motion':True}
         out = []
         for embedding, extra in positive_conditioning:
             data = extra.copy()
@@ -153,7 +203,7 @@ class H3KitMotionBridge:
                     continue
                 keyframe = original.copy()
                 position = keyframe.get('resolved_frame_index', 0)
-                if position > 0 and not data.get('h3kit_motion_prefix'):
+                if (position > 0 or reference is None) and not data.get('h3kit_motion_prefix'):
                     position = min(position, delivery-1) + CONTEXT_FRAMES
                     keyframe['resolved_frame_index'] = position
                 if position >= total:
@@ -165,10 +215,11 @@ class H3KitMotionBridge:
                                            'latent_w':image.shape[-1],'latent':image})
                     continue
                 kept.append(keyframe)
-            data['minimax_keyframes'] = kept + [audio_guide]
+            data['minimax_keyframes'] = kept + ([audio_guide] if audio_guide is not None else [])
             data['h3kit_motion_prefix'] = CONTEXT_FRAMES
             if identities:
                 data['minimax_refs'] = list(data.get('minimax_refs') or []) + identities
             out.append([embedding,data])
-        logging.info('[H3Kit context] 22-frame native prefix, %d new frames, %d internal frames',delivery,total)
+        logging.info('[H3Kit context] 22-frame prefix, video=%s, audio=%s, %d new frames, %d internal frames',
+                     reference is not None, audio_guide is not None, delivery, total)
         return out, CONTEXT_FRAMES, target_latent, delivery
