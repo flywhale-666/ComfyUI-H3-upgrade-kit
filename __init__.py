@@ -5,8 +5,9 @@ from .nodes_av_join import H3KitAVJoin
 from .nodes_vae_decode import H3KitVAEDecodeTiled
 from .nodes_selflift import H3KitSelfLiftSampler
 from .nodes_loop import H3KitStartLoop, H3KitEndLoop, H3KitLoopIteration, H3KitLoopProgress, H3KitLoopResult
-from .nodes_audio import H3KitAudioListToBatch
+from .nodes_audio import H3KitAudioListToBatch, H3KitAudioFrameSync
 from .nodes_reference import H3KitReferencePromptLength
+from .nodes_semantic_bridge import H3KitSemanticBridge
 
 NODE_CLASS_MAPPINGS = {
     "H3KitLatentUpscale3D": H3KitLatentUpscale3D,
@@ -21,7 +22,9 @@ NODE_CLASS_MAPPINGS = {
     "H3KitLoopProgress": H3KitLoopProgress,
     "H3KitLoopResult": H3KitLoopResult,
     "H3KitAudioListToBatch": H3KitAudioListToBatch,
+    "H3KitAudioFrameSync": H3KitAudioFrameSync,
     "H3KitReferencePromptLength": H3KitReferencePromptLength,
+    "H3KitSemanticBridge": H3KitSemanticBridge,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -34,7 +37,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "H3KitStartLoop": "H3Kit Start Loop 多路循环开始",
     "H3KitEndLoop": "H3Kit End Loop 多路循环结束",
     "H3KitAudioListToBatch": "H3Kit 声音列表到声音批次",
+    "H3KitAudioFrameSync": "H3Kit 音频帧率同步",
     "H3KitReferencePromptLength": "H3Kit 提示词与长度替换",
+    "H3KitSemanticBridge": "H3Kit 语义桥（Semantic Bridge）",
 }
 
 WEB_DIRECTORY = "./web"

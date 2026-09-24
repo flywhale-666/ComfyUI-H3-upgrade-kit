@@ -1,5 +1,13 @@
 .github/
 tests/
+test/
+test_*.py
+*_test.py
+artifacts/
+test-results/
+models/
+*.safetensors
+*.part
 .gitignore
 .comfyignore
 .git/

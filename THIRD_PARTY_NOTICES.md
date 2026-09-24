@@ -1,5 +1,11 @@
 # 来源及修改
 
+## 语义桥（2026-09-24）
+
+`nodes_semantic_bridge.py` 根据公开的适配器结构和数学流程独立实现：逐 token RMS 归一化、三层 SiLU MLP、可选幅度匹配和残差混合。研究来源为 [speach1sdef178 / MiniMax-H3-Semantic-Bridge](https://huggingface.co/speach1sdef178/MiniMax-H3-Semantic-Bridge)；动作语义训练和 BUNNY V1/V2 权重来源为 [FourBunny / JOKER141](https://huggingface.co/JOKER141/BUNNY_H3_Conditioning_Bridge)。感谢两位作者公开研究与适配器格式。
+
+本节点没有复制上游节点源码或打包模型权重，不依赖其他自定义节点。用户开启节点并运行时，可从作者仓库自动下载所选的缺失权重，也可手动安装；下载固定仓库版本并校验 SHA-256。模型沿用来源仓库的 MiniMax H3 Community License Agreement 等上游条款；本插件代码许可不替代模型许可。运行采用 FP32 适配器计算，保留输入条件的设备、数据类型及元数据；不常驻缓存模型。
+
 ## 固定22帧原生续接（2026-09-22）
 
 当前 `native_context.py` 负责H3时间布局、原生尾部复制和边界检查，并用最终高清画面对低清上下文做局部空间校准。高清原始latent保持不变，不包含旧版全局颜色补偿或动态Drift算法。续接接口固定22帧；成片复用各段已解码画面进行拼接。

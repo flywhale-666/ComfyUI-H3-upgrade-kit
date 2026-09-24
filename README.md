@@ -29,6 +29,8 @@
 | 分批处理 H3 视频 VAE 解码的小块 | **H3Kit VAE 分块解码** |
 | 将 latent、图片、音频分别循环回传和收集 | **H3Kit Start Loop 多路循环开始** / **H3Kit End Loop 多路循环结束** |
 | 将循环输出的声音列表拼成完整音轨 | **H3Kit 声音列表到声音批次** |
+| 修改视频播放帧率后，同步缩短或拉长音频 | **H3Kit 音频帧率同步** |
+| 使用 BUNNY V2/V1 或原版语义桥改善复杂条件关系 | **H3Kit 语义桥（Semantic Bridge）** |
 
 使用本插件不需要另外安装上面三个原插件，也不会修改 ComfyUI 核心文件。
 
@@ -136,6 +138,26 @@ SelfLift 把一次采样分成低清和高清两个阶段：**先在较低分辨
 
 ## 其他节点怎么用
 
+### 语义桥（Semantic Bridge）
+
+搜索 **H3Kit 语义桥**，连接：**H3 编码后的正向 CONDITIONING → 语义桥 → 采样器的 positive / Guider 的正向条件**。SelfLift 同样接入其 `positive`；负向条件保持原连接。每段若重新编码提示词，在重新编码之后应用语义桥。
+
+默认选择 **BUNNY V2**。保持 `enabled` 开启，点击运行；模型不存在时，节点会从作者的 Hugging Face 仓库自动下载所选权重，下载完成后继续执行。V2 约 22 MB，保存到：
+
+```text
+ComfyUI/models/semantic_bridge/BUNNY_H3_ActionLogic_Bridge_V2.safetensors
+```
+
+目录自动创建；也可选择自动下载 BUNNY V1 或原版 `MiniMaxH3_SemanticBridge_v1.safetensors`，每次只下载所选的一份。已有本地模型时直接使用，不联网。支持手动放入子目录和 ComfyUI 额外模型路径；自定义文件名缺失时提示手动安装。
+
+下载显示节点进度，并校验文件大小和 SHA-256；失败或取消会清理临时文件，下次运行重新下载。无法访问 Hugging Face 时，可从 [BUNNY 模型仓库](https://huggingface.co/JOKER141/BUNNY_H3_Conditioning_Bridge/tree/main) 手动下载到上述目录。打开页面、校验工作流和检查执行缓存都不会下载。更新节点代码后重启 ComfyUI 并刷新页面。
+
+- `enabled`：点击切换 **开启 / 关闭**。关闭时原样传递条件，不下载、不读取模型，即使没有权重也能运行。
+- `alpha`：默认 `0.10`；`0` 等同关闭。固定种子对比后再调整，强度并非越高越好。
+- `magnitude_match`：默认 `per_token`，逐 token 匹配原始幅度；另有整体匹配 `global` 和不匹配 `none`。
+
+语义桥作用于条件向量，不是 LoRA；不要在同一条条件上串联多个语义桥。Ref2VA、参考音频、歌唱和口型属于需要独立验证的用法，可能退化。模型不随插件打包；训练来源和许可见 [来源说明](THIRD_PARTY_NOTICES.md)。
+
 ### 提示词与长度替换
 
 放在 **MiniMax H3 参考转视频 → 第二段 SelfLift K采样器** 之间：
@@ -179,6 +201,20 @@ End Loop 的输入按 `output_value`、`next_iteration_value`、`termination` �
 ### 声音列表到声音批次
 
 连接：**End Loop 的音频 `outputsN` → 本节点 `audio` → Video Combine 的音频输入**。节点一次接收整个列表，沿时间维按轮次顺序拼成一条完整音轨，与“图像列表到图像批次”后的画面配合使用。
+
+### 音频帧率同步
+
+连接：**VAE 解码（音频）／最终拼接音频 → H3Kit 音频帧率同步 → Video Combine 的音频输入**。图像仍直接接 Video Combine。
+
+`source_fps` 是音频原本对应的视频帧率，H3 默认 **24**；`target_fps` 填 Video Combine 当前设置的帧率。它们不是音频的采样率。
+
+| 原始帧率 | 目标帧率 | 原来 6 秒的音频 |
+| --- | --- | --- |
+| 24 | 36 | 缩短到 4 秒 |
+| 24 | 12 | 拉长到 12 秒 |
+| 24 | 24 | 原样输出，仍为 6 秒 |
+
+按 `新时长 = 原时长 × source_fps / target_fps` 做保音高变速，保留原采样率、声道和批次，时长按采样点取整。适用于**视频帧数不变，只修改播放帧率**；如果是插帧后帧率提高、总时长不变，则无需使用。多段视频应先完成原帧率下的音画裁剪与拼接，再对最终音轨应用一次。变速会重新处理波形，大幅变速可能影响音质。
 
 不同采样率统一到最高采样率，单声道与双声道混用时自动复制单声道；每段原有时长保留，不混音、不自动去重。End Loop 应收集每轮新增片段，已累积成完整音轨的结果直接使用最后一轮即可。
 
