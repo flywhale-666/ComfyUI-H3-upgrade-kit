@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-h3-upgrade-kit"
 description = "MiniMax H3 semantic conditioning, audio frame-rate sync, latent upscaling, tiled sampling, batched VAE decoding, motion continuation and SelfLift sampling."
-version = "0.0.14"
+version = "0.0.15"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }

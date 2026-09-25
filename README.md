@@ -72,6 +72,14 @@ git clone https://github.com/flywhale-666/ComfyUI-H3-upgrade-kit.git
 
 **[下载工作流 JSON](https://raw.githubusercontent.com/flywhale-666/ComfyUI-H3-upgrade-kit/main/example_workflows/minimax_digital_human_v2_accelerated.json)** · [查看工作流文件](example_workflows/minimax_digital_human_v2_accelerated.json)
 
+### H3 无限时长快速版 FOR 循环
+
+先生成首段，再通过H3Kit Start Loop / End Loop多次调用SelfLift续接，将每轮新增画面和音频收集后拼合。示例默认循环3次，保留逐轮提示词选择、参考图和BUNNY V2语义桥；可按需要调整循环次数与段长。“无限时长”指分段循环续接，总长度仍受循环次数、内存和生成耗时限制。
+
+请自行选择参考图片及本机模型；示例不附带图片、模型或生成视频。除本插件和ComfyUI核心节点外，需要ComfyUI-Easy-Use、ComfyUI-VideoHelperSuite、ComfyUI_LayerStyle、ComfyUI_Comfyroll_CustomNodes和ComfyUI-ReservedVRAM。每轮新增片段只裁一次22帧上下文，循环末尾再汇总，避免重复拼接。
+
+**[下载 FOR 循环工作流 JSON](https://raw.githubusercontent.com/flywhale-666/ComfyUI-H3-upgrade-kit/main/example_workflows/h3_unlimited_fast_for_loop.json)** · [查看工作流文件](example_workflows/h3_unlimited_fast_for_loop.json)
+
 ## SelfLift 多段续接
 
 ### 先理解它怎么工作
