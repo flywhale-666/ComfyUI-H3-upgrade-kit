@@ -62,11 +62,11 @@ git clone https://github.com/flywhale-666/ComfyUI-H3-upgrade-kit.git
 
 ### MINIMAX 数字人 v2 加速版
 
-使用参考图片和音频生成数字人视频。示例将同一条音频切成两段，通过两段 SelfLift 采样、续接和音画拼接生成完整视频。
+使用参考图片和音频生成数字人视频。示例将同一条音频切成两段，通过两个 SelfLift 采样器直接续接，分别保存首段和去除重复上下文后的续段。两段均采用8步采样、其中2步高清续采，需搭配示例中的加速LoRA。
 
-示例采用 **22 帧续接上下文**，拼接时自动去掉重复的 22 帧。两段目标长度都填 124 帧时，首段输出 124 帧，续段内部生成 141 帧、裁掉 22 帧后新增 119 帧，最终共 **243 帧**。
+示例采用 **22 帧续接上下文**，音画裁剪节点自动去掉重复的22帧。音频时长为 `a` 秒时，首段长度使用 `max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17`；续段使用 `max(17, ceil(a * 24 / 17) * 17)`，按17帧周期向上覆盖音频。上下文由采样器自动添加，不要再手动加22。例如续段音频3.83秒时新增102帧，内部生成124帧。
 
-音频按最终交付的画面长度，以 **24fps** 换算切分位置；第二段从首段结束处开始，再往后按每段实际新增帧数推进。工作流保留了相关计算与裁切节点，调整段长时请一起检查音频切分点。下载 JSON 后拖入 ComfyUI，即可查看完整工作流。
+音频按 **24fps** 换算切分位置；第二段从首段结束处开始。需要合成完整视频时，将首段解码画面和音频分别接入音画裁剪与拼接的 `previous_frames`、`previous_audio`。段长对齐可能产生多余尾部，严格匹配音频时长时需裁齐。若要保留原歌，最终合成使用原始完整音频；`continue_audio=true` 会重新生成前段最后约0.2秒的过渡尾音。下载JSON后拖入ComfyUI即可查看完整工作流。
 
 请自行选择参考图片、音频和本机对应的 H3 模型、文本编码器、音视频 VAE、加速 LoRA 及 latent 放大模型，素材和模型不随示例提供。示例还使用 ComfyUI-UniversalToolkit、ComfyUI-VideoHelperSuite、ComfyUI-KJNodes、ComfyUI_LayerStyle、ComfyUI_Comfyroll_CustomNodes、ComfyUI-ReservedVRAM 和 rgthree-comfy，缺失时需另行安装。
 
@@ -108,7 +108,7 @@ SelfLift 把一次采样分成低清和高清两个阶段：**先在较低分辨
 | `high_resolution_steps` | 留给高清阶段的步数 |
 | `lowres_scale` | 低清阶段的宽高比例，例如 `0.5` |
 | `upscale_weights` | H3 潜空间放大权重 |
-| `context_vae` | 用于22帧边界检查及低清空间校准，高清原始上下文保持不变 |
+| `context_vae` | 直连时用于边界检查及低清校准；外部视频续接时用于建立时间对齐的高清、低清上下文 |
 | `boundary_check` | 是否检查并校准上下文；开启时需要连接 `context_vae`，不接 VAE 时请关闭 |
 | `previous_frames` | 配合 `context_vae` 接前段解码画面，可省去一次重复解码 |
 | `continue_audio` | 开启时对接缝尾音做平滑过渡 |
@@ -125,7 +125,7 @@ SelfLift 把一次采样分成低清和高清两个阶段：**先在较低分辨
 - 当前仅支持 `euler`。常用参数顺序为 `steps → cfg → sampler_name → scheduler → denoise`。
 - `denoise` 默认 1.0；设为 0 时直接返回输入，不执行采样或续接，也不创建新的拼接信息。
 - 接入外部 `sigmas` 后，它会覆盖 `steps`、`scheduler`、`denoise` 的调度设置，`high_resolution_steps` 仍然生效。
-- 高清阶段直接使用原始latent尾部；低清阶段开启 `boundary_check` 后，用最终高清画面校准继承区的空间差异。需要 `context_vae`；不连接VAE时关闭检查，两个阶段均保持原始latent。
+- SelfLift直连时，高清阶段使用原始latent尾部；低清阶段开启 `boundary_check` 后，用最终高清画面校准继承区的空间差异。需要 `context_vae`；关闭检查时沿用前段保存的双分辨率状态。外部视频续接的VAE要求见下文。
 - 输入包含按时间分段的提示词时，需要考虑自动增加的上下文前缀。22帧上下文对应7个视频latent时间步。
 - 单张首帧条件在续接时转为外观参考，中间帧、尾帧、多帧 Guide 及音频锚点随前缀后移。
 - 高清阶段恢复原生22帧上下文，不增加采样步数。
@@ -138,12 +138,12 @@ SelfLift 把一次采样分成低清和高清两个阶段：**先在较低分辨
 
 1. 前段H3音视频latent接“动作续接”的 `previous_latent`；也可以直接接图片帧/音频及对应VAE。当前段条件和目标latent接动作续接的两个必填输入。
 2. 动作续接的 `positive_conditioning` → SelfLift的 `positive`；动作续接的 `target_latent` → SelfLift的 `latent_image`。
-3. SelfLift的 `previous_latent` **留空**，视频续接时 `context_vae` **必须接H3视频VAE**，遗漏会在采样前报错停止，不再退回latent插值。它会读取已准备的22帧前缀，保持音频条件与关键帧时间，不再次添加前缀。若SelfLift接了 `previous_frames`，直接取这些图片的末尾22帧、缩小并编码为低清latent，省去高清解码；没接图片才先解码高清上下文。图片应与前段latent的裁剪、时间终点一致；高清阶段仍恢复原始latent。该要求不受 `boundary_check` 控制；纯音频续接不构造视频上下文，无需视频VAE。原来的SelfLift直连规则不变。
+3. SelfLift的 `previous_latent` **留空**，视频续接时 `context_vae` **必须接H3视频VAE**，遗漏会在采样前报错停止，不再退回latent插值。它会读取已准备的22帧前缀，保持音频条件与关键帧时间，不再次添加前缀。若SelfLift接了 `previous_frames`，以这些图片的末尾22帧分别编码高清、低清上下文，统一时间终点；例如81帧外部视频编码后只对应73帧，不能把原视频末尾与截尾latent混用。没接图片时保留高清latent，并解码它来构造低清上下文。该要求不受 `boundary_check` 控制；纯音频续接不构造视频上下文，无需视频VAE。原来的SelfLift直连规则不变。
 4. SelfLift输出分别解码，再接音画裁剪与拼接；需要完整成片时，将前段画面/音频接到拼接节点。
 
-新路径的视频上下文始终通过VAE从图片编码，`lowres_scale=1` 时也不绕过；接入 `previous_frames` 只省去高清解码，不省去编码。上下文不使用latent插值回退。
+新路径的低清上下文始终通过VAE从图片编码，`lowres_scale=1` 时也不绕过；接入 `previous_frames` 时两个分辨率都使用相同尾帧，不再恢复时间终点可能不同的高清前缀。上下文不使用latent插值回退，也不向新生成帧叠加上下文的通道均值偏差。
 
-新路径在学习型放大后，用已知22帧上下文估计每通道的空间平均偏差，仅对首个新增周期（5个latent时间步）平滑衰减校正，减轻交接处明暗回跳。原始高清前缀、空间细节和后续时间步不在此处修改；不增加采样步数。SelfLift直连与纯音频续接不使用这项校正。
+外部视频续接的高清阶段以低清放大结果保留第一组新帧，在首个17帧周期内逐渐放开高清续采，避免第23帧开始突然改写导致颜色闪动。这些帧已在低清阶段生成动作，不是重复前段尾帧；已有的锁定遮罩保持不变。
 
 这条路径无需补跑第一段SelfLift，也不伪造缺失的前段低清状态；从本段生成后，输出已包含SelfLift低清状态，下一段可以直接串联。直接串联前段SelfLift的原有双分辨率续接路径保持不变。
 
@@ -260,13 +260,17 @@ H3 条件与目标 latent → 动作续接 → 采样 → 解码 → 音画裁�
 
 | 前段输入 | 需要的 VAE | 行为 |
 | --- | --- | --- |
-| `previous_latent` | 保持原规则，边界检查开启时需要 `video_vae` | 优先沿用前段同分辨率H3音视频latent；忽略外部 `previous_audio`，图片仍用于原来的边界检查 |
+| `previous_latent` | 边界检查或原片尾帧重新编码需要 `video_vae` | 优先沿用前段同分辨率H3音视频latent；忽略外部 `previous_audio`，图片用于边界检查或外部视频截尾对齐 |
 | 仅 `previous_frames` | `video_vae` | 编码末尾22张图片，锁定视频上下文；不引入前段音频 |
 | `previous_frames` + `previous_audio` | `video_vae` + `audio_vae` | 编码末尾22帧及音频末尾22/24秒，建立音画上下文 |
 | 仅 `previous_audio` | `audio_vae` | 使用末尾22/24秒音频作为续接条件，不锁定视频画面 |
 | 三种前段输入都不接 | 无 | 首段透传，`prefix_frames=0` |
 
 图片帧路径使用H3视频VAE，按目标latent尺寸缩放。超过22张只取末尾22张；不足22张在开头重复首帧补齐，单张图片作为静止上下文。音频路径使用H3音频VAE，自动重采样；不足约0.917秒在开头补静音。音画同时传入时，两者应对应同一结束时刻；外部视频应先按24fps加载。输入图片来自视频时，连续尾帧比单图提供更多运动信息。
+
+外部视频先编码再接入 `previous_latent` 时，若完整 `previous_frames` 比视频latent多不足一个17帧周期，并连接了 `video_vae`，动作续接会重新编码真实末尾22帧，并将音频参考同步取到原片终点。例如81帧输入编码为73帧时，不再截取早8帧的尾音，避免拼接后重复尾句。
+
+音频取尾不依赖 `previous_frames`。没有完整原片帧数时，若音频比视频latent长不足一个17帧周期，则按40Hz音频长度估计24fps的末帧，取实际音频尾部并保留取整偏差。正常H3生成的音视频长度及带有分段信息的latent保持原取尾规则。这项时长估计不能恢复视频latent已丢失的图片；准确恢复画面尾部仍需原始图片。
 
 节点输出的正向条件与 `target_latent` 都连接当前普通K采，或连接SelfLift的 `positive` 与 `latent_image`（SelfLift的 `previous_latent` 留空）。四种续接路径均输出 `prefix_frames=22`；纯音频路径的前22帧画面自由生成，随后也由音画裁剪与拼接去除。裁剪节点接完整解码画面和音频；纯音频续接只输出本段新音画时，不要把前段音频单独接到裁剪节点的 `previous_audio`（该接口用于与前段画面一起拼接）。
 

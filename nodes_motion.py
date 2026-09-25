@@ -2,6 +2,7 @@
 """固定22帧的原生H3音视频续接。"""
 
 import logging
+import math
 
 import torch
 import torch.nn.functional as F
@@ -11,7 +12,7 @@ import comfy.nested_tensor
 import comfy.utils
 
 from .motion_layout import ensure_motion_layout
-from .native_context import CONTEXT_FRAMES, CONTEXT_TOKENS, continuation_size, native_video_tail, pixel_frames
+from .native_context import CONTEXT_FRAMES, CONTEXT_TOKENS, FRAME_PERIOD, continuation_size, native_video_tail, pixel_frames
 
 
 H3KIT_NATIVE_FPS = 24
@@ -82,17 +83,27 @@ def lock_motion_prefix(target_latent, reference):
     return out
 
 
-def previous_audio_tail(latent, frames=24):
+def previous_audio_tail(latent, frames=24, source_frames=None):
     video, audio = split_av_streams(latent)
     if audio.ndim != 4:
         raise ValueError('H3音频latent须为[B,C,2,T]。')
-    count = pixel_frames(video.shape[2])
-    length = latent.get('h3kit_motion_length')
-    if length is not None:
-        count = sum(length)
+    count = source_frames
+    if count is None:
+        count = pixel_frames(video.shape[2])
+        length = latent.get('h3kit_motion_length')
+        if length is not None:
+            count = sum(length)
+        elif 'h3kit_selflift_segment' not in latent:
+            extra_ticks = audio.shape[-1] - count * H3KIT_AUDIO_FRAME_SCALE
+            # 外部音频保留了视频VAE截掉的尾部。没有原图时，以音频时长估计
+            # 最后一帧；正常H3生成的音视频长度仅有不到半个audio token的差异。
+            if 0.5 < extra_ticks < FRAME_PERIOD * H3KIT_AUDIO_FRAME_SCALE:
+                source_frames = math.ceil(audio.shape[-1] / H3KIT_AUDIO_FRAME_SCALE)
+                count = source_frames
     total = min(audio.shape[-1], round(count * H3KIT_AUDIO_FRAME_SCALE))
     overhang = total - count * H3KIT_AUDIO_FRAME_SCALE
-    if not -0.5 < overhang < 0.5:
+    # 完整外部视频的音频编码可能少一个token；保留这个提前量，避免再重复约25ms。
+    if source_frames is None and not -0.5 < overhang < 0.5:
         logging.warning('[H3Kit context] audio grid differs from video; ignoring fractional overhang')
         overhang = 0.0
     ticks = min(total, round(frames * H3KIT_AUDIO_FRAME_SCALE))
@@ -146,9 +157,9 @@ class H3KitMotionBridge:
                     'target_latent': ('LATENT',),
                 },
                 'optional': {
-                    'previous_latent': ('LATENT', {'tooltip':'优先使用前段同分辨率H3音视频latent，保持原生续接；接入后忽略previous_audio，图片仍用于边界检查。'}),
-                    'video_vae': ('VAE', {'tooltip':'无previous_latent时用于编码图片尾帧，必须连接H3视频VAE。latent路径用于边界检查及低清校准，高清原始latent不变。'}),
-                    'previous_frames': ('IMAGE', {'tooltip':'无previous_latent时编码末尾22帧；不足22帧在开头重复首帧补齐，单图按静止上下文处理。自动缩放到目标尺寸。有latent时仍用于原来的边界检查。'}),
+                    'previous_latent': ('LATENT', {'tooltip':'优先使用前段同分辨率H3音视频latent；接入后忽略previous_audio，图片用于边界检查或外部视频截尾对齐。'}),
+                    'video_vae': ('VAE', {'tooltip':'无previous_latent时用于编码图片尾帧，必须连接H3视频VAE。原生latent路径用于边界检查及低清校准；提供完整原图时也用于修正外部视频编码截尾。'}),
+                    'previous_frames': ('IMAGE', {'tooltip':'无previous_latent时编码末尾22帧；不足22帧在开头重复首帧补齐。已有latent时用于视频边界检查和原片尾帧校准。音频取尾不要求连接图片；缺少原片帧数时按音频时长估计终点。'}),
                     'boundary_check': ('BOOLEAN', {'default':True,'tooltip':'仅用于latent路径的22帧边界检查与低清校准。关闭不影响图片和音频输入所需的VAE编码。'}),
                     'previous_audio': ('AUDIO', {'tooltip':'无previous_latent时使用音频末尾22/24秒；短音频在开头补静音。可单独接入或配合图片，音画应对齐同一结束时刻。'}),
                     'audio_vae': ('VAE', {'tooltip':'previous_audio使用的H3音频VAE；仅在无previous_latent且接入音频时需要。'}),
@@ -178,9 +189,19 @@ class H3KitMotionBridge:
                          and previous_frames.shape[1] >= source.shape[-2] * 16
                          and previous_frames.shape[2] >= source.shape[-1] * 16
                          and tuple(previous_frames.shape[1:3]) != (source.shape[-2] * 16, source.shape[-1] * 16))
-            reference, _ = native_video_tail(source, video_vae, previous_frames, boundary_check,
-                                            align_to_frames=low_stage)
-            audio, ticks, overhang = previous_audio_tail(previous_latent)
+            native_frames = pixel_frames(source.shape[2])
+            source_frames = None
+            # 外部视频编码会丢掉最后不足一个周期的帧，音频却仍覆盖原片末尾。
+            # 完整原片只比latent多不到一个周期；22张尾帧或跨周期的累积画面不改变原生时间轴。
+            if (video_vae is not None and previous_frames is not None
+                    and native_frames < len(previous_frames) < native_frames + FRAME_PERIOD):
+                source_frames = len(previous_frames)
+                reference = encode_frame_tail(previous_frames, video_vae, source)
+                logging.info('[H3Kit context] external media endpoint=%d frames; aligned video and audio tails', source_frames)
+            else:
+                reference, _ = native_video_tail(source, video_vae, previous_frames, boundary_check,
+                                                align_to_frames=low_stage)
+            audio, ticks, overhang = previous_audio_tail(previous_latent, source_frames=source_frames)
             end_coord = round(CONTEXT_FRAMES * H3KIT_AUDIO_FRAME_SCALE + overhang)
             audio_guide = {'resolved_frame_index':end_coord/H3KIT_AUDIO_FRAME_SCALE-ticks/H3KIT_AUDIO_FRAME_SCALE,
                            'audio_latent':audio, 'h3kit_motion':True}

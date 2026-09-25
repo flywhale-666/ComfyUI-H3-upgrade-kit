@@ -108,7 +108,7 @@ def resize_video(video, size):
     return F.interpolate(video.float(), size=(video.shape[2], *size), mode="trilinear", align_corners=False).to(video)
 
 
-def encode_low_prefix(video, vae, size, previous_frames=None):
+def encode_frame_prefix(video, vae, size, previous_frames=None):
     if previous_frames is None:
         decoded = vae.decode(video[:, :, :CONTEXT_TOKENS])
         batches = decoded.reshape(video.shape[0], CONTEXT_FRAMES, *decoded.shape[-3:])
@@ -279,14 +279,17 @@ def euler_step(state, x0, sigma, sigma_next):
     return state + (state - x0.to(state)) * ((sigma_next - sigma) / sigma).to(state)
 
 
-def align_external_lift(lifted, reference, prefix):
-    """以已知上下文估计放大偏差，在第一个新生成周期内平滑释放。"""
-    count = min(TOKEN_PERIOD, lifted.shape[2]-prefix)
+def release_high_context(video, mask, lifted, prefix):
+    """保留低清已生成的接缝动作，在首个新周期内逐渐放开高清续采。"""
+    count = min(TOKEN_PERIOD, video.shape[2] - prefix)
     if count < 1:
         return
-    delta = (reference[:, :, :prefix].to(lifted)-lifted[:, :, :prefix]).mean((2, 3, 4), keepdim=True)
-    weight = 0.5+0.5*torch.cos(torch.linspace(0, torch.pi, count, device=lifted.device, dtype=lifted.dtype))
-    lifted[:, :, prefix:prefix+count].add_(delta*weight[None, None, :, None, None])
+    end = prefix + count
+    free = mask[:, :, prefix:end] == 1
+    anchor = video[:, :, prefix:end]
+    anchor.copy_(torch.where(free, lifted[:, :, prefix:end].to(anchor), anchor))
+    ramp = 0.5 - 0.5 * torch.cos(torch.linspace(0, torch.pi, count, device=mask.device, dtype=mask.dtype))
+    mask[:, :, prefix:end] = torch.where(free, ramp[None, None, :, None, None], mask[:, :, prefix:end])
 
 
 def progressive_sample(model, positive, negative, latent, sigmas, seed, cfg,
@@ -313,9 +316,12 @@ def progressive_sample(model, positive, negative, latent, sigmas, seed, cfg,
     negative = shift_conditioning(negative, info["overlap_frames"], info["delivery_frames"])
     size = tuple(video.shape[-2:])
     low_size = tuple(max(2, round(s * lowres_scale / 2) * 2) for s in size)
-    if low_carry is None and prefix and latent.get("h3kit_motion_length") is not None:
-        # 新路径的上下文只从图片编码；latent缩放仅用于后面待生成的部分。
-        low_prefix = encode_low_prefix(video, context_vae, low_size, previous_frames).to(video)
+    external_context = low_carry is None and prefix and latent.get("h3kit_motion_length") is not None
+    if external_context:
+        # 外部视频编码可能丢掉不足一个周期的尾帧；两阶段必须使用同一组22帧。
+        if previous_frames is not None:
+            video[:, :, :prefix] = encode_frame_prefix(video, context_vae, size, previous_frames).to(video)
+        low_prefix = encode_frame_prefix(video, context_vae, low_size, previous_frames).to(video)
         low = torch.cat((low_prefix, resize_video(video[:, :, prefix:], low_size)), dim=2)
         del low_prefix
         logging.info("[H3Kit SelfLift] encoded external 22-frame context at low resolution")
@@ -361,9 +367,9 @@ def progressive_sample(model, positive, negative, latent, sigmas, seed, cfg,
     native_low = latent_format.process_out(x0_video.float()).to(mm.intermediate_device()).clone()
     del low_model, low_latent, low, x0_video, x0_audio, state_audio, low_positive, low_negative
     lifted = lifter(native_low, size, weights)
-    if low_carry is None and prefix and latent.get("h3kit_motion_length") is not None:
-        align_external_lift(lifted, video, prefix)
     lifted[:, :, :prefix].copy_(video[:, :, :prefix].to(lifted))
+    if external_context:
+        release_high_context(video, vm, lifted, prefix)
     high_x0 = latent_format.process_in(lifted)
     noise = comfy.sample.prepare_noise(high_x0, (seed + 1) % (1 << 64), latent.get("batch_index")).to(high_x0)
     video_next = euler_step(sampling.noise_scaling(sigma, noise, high_x0), high_x0, sigma, next_sigma)
