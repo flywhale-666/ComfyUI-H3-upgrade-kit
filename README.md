@@ -54,7 +54,7 @@ git clone https://github.com/flywhale-666/ComfyUI-H3-upgrade-kit.git
 
 也可以下载仓库 ZIP，将解压后的插件目录放进 `ComfyUI/custom_nodes/`，然后重启。
 
-额外依赖为 **`torchaudio`**，用于音频重采样和变速。通过 Manager 安装时按依赖声明安装；手动安装时，请在 ComfyUI 的 Python 环境中执行 `python -m pip install -r custom_nodes/ComfyUI-H3-upgrade-kit/requirements.txt`。已有的 torchaudio 应与当前 PyTorch 版本匹配。其余依赖由 ComfyUI 提供。
+**没有额外的 Python 依赖需要安装。** 插件使用 ComfyUI 环境已有的依赖，`requirements.txt` 留空。音频功能使用的 `torchaudio` 已包含在 ComfyUI 官方 PyTorch 安装命令和 Windows 便携包中，不重复声明；自行精简的环境需保留与 PyTorch 匹配的 torchaudio。
 
 请使用已支持 MiniMax H3 的新版 ComfyUI。动作续接需要支持任意关键帧锚点的 H3 布局，首次使用时会检查；若提示布局不支持，请先更新 ComfyUI。
 

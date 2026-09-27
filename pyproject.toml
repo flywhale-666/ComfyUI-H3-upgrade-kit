@@ -1,11 +1,11 @@
 [project]
 name = "comfyui-h3-upgrade-kit"
 description = "MiniMax H3 semantic conditioning, audio frame-rate sync, latent upscaling, tiled sampling, batched VAE decoding, motion continuation and SelfLift sampling."
-version = "0.0.16"
+version = "0.0.17"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
-dependencies = ["torchaudio"]
+dependencies = []
 
 [project.urls]
 Repository = "https://github.com/flywhale-666/ComfyUI-H3-upgrade-kit"
