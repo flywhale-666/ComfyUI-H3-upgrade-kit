@@ -295,7 +295,7 @@ def release_high_context(video, mask, lifted, prefix):
 def progressive_sample(model, positive, negative, latent, sigmas, seed, cfg,
                        high_steps, lowres_scale, weights, previous=None,
                        continue_audio=True, lifter=learned_lift, sampler_name="euler",
-                       spatial_tiles=False, minimum_tiles=4, context_vae=None, previous_frames=None,
+                       spatial_tiles=False, minimum_tiles=2, context_vae=None, previous_frames=None,
                        boundary_check=True):
     if sampler_name != "euler":
         raise ValueError("当前 SelfLift 分辨率交接仅支持标准 euler。")

@@ -13,12 +13,12 @@ import comfy.patcher_extension
 import comfy.sampler_helpers
 
 
-def sampling_tile_regions(length, tile_count=2):
+def sampling_axis_regions(length, tile_count):
     patches = (length + 1) // 2
     tile_count = max(1, min(tile_count, max(1, patches // 2)))
     if patches < 4 or tile_count <= 1:
         return [(0, length)]
-    overlap = min(4, max(1, patches // 8))
+    overlap = min(4, max(1, patches // 8), patches // tile_count // 2)
     regions = []
     for index in range(tile_count):
         start = max(0, index * patches // tile_count - overlap) * 2
@@ -29,11 +29,41 @@ def sampling_tile_regions(length, tile_count=2):
     return regions
 
 
+def sampling_grid_plans(height, width, minimum_tiles):
+    plans = []
+    max_rows = min(8, max(1, ((height + 1) // 2) // 2))
+    max_cols = min(8, max(1, ((width + 1) // 2) // 2))
+    minimum_tiles = min(minimum_tiles, max_rows * max_cols)
+    for rows in range(1, max_rows + 1):
+        for cols in range(1, max_cols + 1):
+            count = rows * cols
+            if not minimum_tiles <= count <= 8:
+                continue
+            ys = sampling_axis_regions(height, rows)
+            xs = sampling_axis_regions(width, cols)
+            regions = [(y0, y1, x0, x1) for y0, y1 in ys for x0, x1 in xs]
+            aspect = max(max(y1 - y0, x1 - x0) / min(y1 - y0, x1 - x0)
+                         for y0, y1, x0, x1 in regions)
+            ph, pw = (height + 1) // 2, (width + 1) // 2
+            core_heights = [min(height, (i + 1) * ph // rows * 2) - i * ph // rows * 2 for i in range(rows)]
+            core_widths = [min(width, (i + 1) * pw // cols * 2) - i * pw // cols * 2 for i in range(cols)]
+            # 重叠不能把狭长的核心区伪装成合理块形状。
+            aspect = max(aspect, max(max(h, w) / min(h, w) for h in core_heights for w in core_widths))
+            area = sum((y1 - y0) * (x1 - x0) for y0, y1, x0, x1 in regions)
+            plans.append(dict(rows=rows, cols=cols, tiles=count, regions=regions,
+                              aspect=aspect, area=area))
+    # 优先满足实际块形状约束，再按最少块数、紧凑程度及重叠开销选择。
+    return sorted(plans, key=lambda p: (p['aspect'] > 2,
+                  p['tiles'] if p['aspect'] <= 2 else p['aspect'], p['aspect'], p['area'],
+                  p['rows'] if width >= height else p['cols']))
+
+
 def build_tile_layout(signature, payload):
     return PackedLayout(*signature, keyframes=payload.get("keyframes"), refs=payload.get("refs"))
 
 
-def crop_tile_payload(payload, context, video, audio, axis, start, end):
+def crop_tile_payload(payload, context, video, audio, region):
+    y0, y1, x0, x1 = region
     height, width = video.shape[-2:]
     padded_height, padded_width = (height + 1) // 2 * 2, (width + 1) // 2 * 2
     full_layout = payload.get("layout")
@@ -50,34 +80,45 @@ def crop_tile_payload(payload, context, video, audio, axis, start, end):
                 continue
             if latent.shape[-2:] != (height, width):
                 raise ValueError("H3Kit: tiled H3 keyframes must match the target latent height and width")
-            region = latent.narrow(axis, start, end - start)
+            cropped = latent[..., y0:y1, x0:x1]
             keyframes.append({**keyframe, "latent": comfy.ldm.common_dit.pad_to_patch_size(
-                region, (1, 2, 2)).contiguous()})
+                cropped, (1, 2, 2)).contiguous()})
         tiled["keyframes"] = keyframes
         tiled["cond_video_latents"] = [keyframe["latent"] for keyframe in keyframes
                                        if keyframe.get("latent") is not None]
         tiled["cond_video_latents"] += [reference["latent"] for reference in payload.get("refs") or []
                                         if reference.get("latent") is not None]
-    tile_height = end - start if axis == 3 else height
-    tile_width = end - start if axis == 4 else width
+    tile_height, tile_width = y1 - y0, x1 - x0
     layout = build_tile_layout((context.shape[1], video.shape[2], (tile_height + 1) // 2 * 2,
                              (tile_width + 1) // 2 * 2, audio.shape[-1]), tiled)
     for (source_start, source_end, kind), (target_start, target_end, _) in zip(full_layout.segments, layout.segments):
         positions = full_layout.position_ids[source_start:source_end]
         if kind in ("cond", "video"):
             positions = positions.reshape(-1, padded_height // 2, padded_width // 2, 3)
-            positions = positions.narrow(axis - 2, start // 2, (end - start + 1) // 2).reshape(-1, 3)
+            positions = positions[:, y0 // 2:(y1 + 1) // 2, x0 // 2:(x1 + 1) // 2].reshape(-1, 3)
         layout.position_ids[target_start:target_end].copy_(positions)
     tiled["layout"] = layout
     return tiled
 
 
+def tile_axis_window(regions, index):
+    start, end = regions[index]
+    window = torch.ones(end - start, dtype=torch.float32, device="cpu")
+    if index > 0:
+        overlap = min(end, regions[index - 1][1]) - start
+        window[:overlap] *= (torch.arange(overlap, dtype=torch.float32, device="cpu") + 0.5) / overlap
+    if index + 1 < len(regions):
+        overlap = end - regions[index + 1][0]
+        window[-overlap:] *= 1.0 - (torch.arange(overlap, dtype=torch.float32, device="cpu") + 0.5) / overlap
+    return window
+
+
 def run_tiled_diffusion(executor, streams, timestep, context, transformer_options, minimax_payload=None,
                    n_tiles=2, plan=None, **kwargs):
     video, audio = streams
-    axis = 3 if (video.shape[3] + 1) // 2 >= (video.shape[4] + 1) // 2 else 4
-    length = video.shape[axis]
-    regions = sampling_tile_regions(length, plan['tiles'] if plan is not None else n_tiles)
+    grid = plan if plan is not None and 'regions' in plan else sampling_grid_plans(
+        video.shape[3], video.shape[4], plan.get('min_tiles', n_tiles) if plan is not None else n_tiles)[0]
+    regions = grid['regions']
     if len(regions) == 1:
         return executor(streams, timestep, context, transformer_options, minimax_payload=minimax_payload, **kwargs)
     if kwargs.get("control") is not None:
@@ -86,34 +127,27 @@ def run_tiled_diffusion(executor, streams, timestep, context, transformer_option
     # the accelerator while the next tile is evaluated.
     video_output = torch.zeros(video.shape, dtype=torch.float32, device="cpu")
     audio_output = None
-    weights = torch.zeros(length, dtype=torch.float32, device="cpu")
-    for index, (start, end) in enumerate(regions):
-        tile = video.narrow(axis, start, end - start).contiguous()
-        payload = crop_tile_payload(minimax_payload or {}, context, video, audio, axis, start, end)
+    weights = torch.zeros(video.shape[-2:], dtype=torch.float32, device="cpu")
+    ys = sampling_axis_regions(video.shape[3], grid['rows'])
+    xs = sampling_axis_regions(video.shape[4], grid['cols'])
+    for index, (y0, y1, x0, x1) in enumerate(regions):
+        tile = video[..., y0:y1, x0:x1].contiguous()
+        payload = crop_tile_payload(minimax_payload or {}, context, video, audio, (y0, y1, x0, x1))
         tile_kwargs = kwargs.copy()
         mask = tile_kwargs.get("denoise_mask")
         if mask is not None:
-            tile_kwargs["denoise_mask"] = mask.narrow(axis, start, end - start)
+            tile_kwargs["denoise_mask"] = mask[..., y0:y1, x0:x1]
         predicted_video, predicted_audio = executor(
             [tile, audio], timestep, context, transformer_options.copy(), minimax_payload=payload, **tile_kwargs)
-        window = torch.ones(end - start, device=video.device, dtype=torch.float32)
-        if index > 0:
-            overlap = min(end, regions[index - 1][1]) - start
-            window[:overlap] *= (torch.arange(overlap, device=video.device, dtype=torch.float32) + 0.5) / overlap
-        if index + 1 < len(regions):
-            overlap = end - regions[index + 1][0]
-            window[-overlap:] *= 1.0 - (torch.arange(overlap, device=video.device, dtype=torch.float32) + 0.5) / overlap
+        row, col = divmod(index, grid['cols'])
+        window = tile_axis_window(ys, row)[:, None] * tile_axis_window(xs, col)[None, :]
         predicted_video = predicted_video.float().cpu()
-        window = window.cpu()
-        weights[start:end].add_(window)
-        window_shape = [1] * video.ndim
-        window_shape[axis] = end - start
-        video_output.narrow(axis, start, end - start).addcmul_(predicted_video.float(), window.view(window_shape))
+        weights[y0:y1, x0:x1].add_(window)
+        video_output[..., y0:y1, x0:x1].addcmul_(predicted_video, window)
         if audio_output is None:
             audio_output = predicted_audio.float().clone()
         del tile, payload, tile_kwargs, predicted_video, predicted_audio, window
-    window_shape[axis] = length
-    video_output.div_(weights.view(window_shape))
+    video_output.div_(weights)
     return [video_output.to(device=video.device, dtype=video.dtype), audio_output.to(audio.dtype)]
 
 
@@ -139,11 +173,12 @@ def count_condition_elements(condition, tile_height, tile_width, channels):
     return elements
 
 
-def estimate_tile_budget(model, noise_shape, conds, latent_shapes, regions, axis):
+def estimate_tile_budget(model, noise_shape, conds, latent_shapes, regions):
     video_shape, audio_shape = latent_shapes
     full_elements = math.prod(video_shape[1:]) + math.prod(audio_shape[1:])
     tile_shape = list(video_shape)
-    tile_shape[axis] = max(end - start for start, end in regions)
+    tile_shape[3] = max(y1 - y0 for y0, y1, x0, x1 in regions)
+    tile_shape[4] = max(x1 - x0 for y0, y1, x0, x1 in regions)
     tile_shape[3] = (tile_shape[3] + 1) // 2 * 2
     tile_shape[4] = (tile_shape[4] + 1) // 2 * 2
     tile_elements = math.prod(tile_shape[1:]) + math.prod(audio_shape[1:])
@@ -160,28 +195,35 @@ def estimate_tile_budget(model, noise_shape, conds, latent_shapes, regions, axis
 def prepare_tile_sampling(executor, model, noise_shape, conds, model_options=None,
                             force_full_load=False, force_offload=False, *, latent_shapes, plan=None):
     video_shape, audio_shape = latent_shapes
-    axis = 3 if (video_shape[3] + 1) // 2 >= (video_shape[4] + 1) // 2 else 4
     full_elements = math.prod(video_shape[1:]) + math.prod(audio_shape[1:])
     if tuple(noise_shape) != (video_shape[0], 1, full_elements):
         raise ValueError("H3Kit: tiled memory planning received a different latent shape than the sampling input")
-    count = 2
+    available = available_tile_workspace(model)
+    candidates = sampling_grid_plans(video_shape[3], video_shape[4], plan.get('min_tiles', 1) if plan is not None else 2)
+    valid = [grid for grid in candidates if grid['aspect'] <= 2]
+    if valid:
+        candidates = valid
+    selected = None
+    for grid in candidates:
+        budget = estimate_tile_budget(model, noise_shape, conds, latent_shapes, grid['regions'])
+        if selected is None or budget[-1] < selected[1][-1]:
+            selected = (grid, budget)
+        if budget[-1] <= available:
+            selected = (grid, budget)
+            break
+    grid, budget = selected
     if plan is not None:
-        available = available_tile_workspace(model)
-        for count in range(plan.get('min_tiles', 1), 9):
-            regions = sampling_tile_regions(video_shape[axis], count)
-            _, _, _, _, minimum = estimate_tile_budget(model, noise_shape, conds, latent_shapes, regions, axis)
-            if minimum <= available:
-                break
-        count = len(regions)
-        plan['tiles'] = count
-        logging.info("[H3Kit tiling plan] axis=%s tiles=%d target=%.2f MiB estimate_fits=%s",
-                     'H' if axis == 3 else 'W', plan['tiles'], available / 2**20, minimum <= available)
-    regions = sampling_tile_regions(video_shape[axis], count)
-    if len(regions) == 1 or force_offload:
+        plan.update(grid)
+    budget_shape, tile_shape, buffer_bytes, preferred, minimum = budget
+    logging.info("[H3Kit tiling plan] grid=%dx%d tiles=%d max_aspect=%.3f target=%.2f MiB estimate_fits=%s",
+                 grid['rows'], grid['cols'], grid['tiles'], grid['aspect'], available / 2**20, minimum <= available)
+    if grid['aspect'] > 2:
+        logging.warning("[H3Kit tiling] 8-tile/patch-grid limit prevents a 2:1 tile aspect ratio; using the closest layout")
+    if minimum > available:
+        logging.warning("[H3Kit tiling] estimated workspace exceeds budget; reduce resolution or video length if out of memory")
+    if grid['tiles'] == 1 or force_offload:
         return executor(model, noise_shape, conds, model_options=model_options,
                         force_full_load=force_full_load, force_offload=force_offload)
-    budget_shape, tile_shape, buffer_bytes, preferred, minimum = estimate_tile_budget(
-        model, noise_shape, conds, latent_shapes, regions, axis)
     logging.info("[H3Kit tiling memory] largest_tile=%s full_audio=%s full_state_buffers=%.2f MiB "
                  "minimum=%.2f MiB preferred=%.2f MiB (ComfyUI estimates; additional models and reserves excluded)",
                  tuple(tile_shape), audio_shape, buffer_bytes * noise_shape[0] / 2**20,

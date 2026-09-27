@@ -1711,7 +1711,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.15",
+        "ver": "0.0.16",
         "Node name for S&R": "H3KitAudioListToBatch"
       }
     },
@@ -1880,7 +1880,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.15",
+        "ver": "0.0.16",
         "Node name for S&R": "H3KitReferencePromptLength"
       },
       "widgets_values": [
@@ -2402,7 +2402,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.15",
+        "ver": "0.0.16",
         "Node name for S&R": "H3KitStartLoop"
       },
       "widgets_values": [
@@ -2494,7 +2494,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.15",
+        "ver": "0.0.16",
         "Node name for S&R": "H3KitAVJoin"
       }
     },
@@ -2608,7 +2608,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.15",
+        "ver": "0.0.16",
         "Node name for S&R": "H3KitEndLoop"
       },
       "widgets_values": [
@@ -2820,7 +2820,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.15",
+        "ver": "0.0.16",
         "Node name for S&R": "H3KitSelfLiftSampler"
       },
       "widgets_values": [
@@ -3058,7 +3058,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.15",
+        "ver": "0.0.16",
         "Node name for S&R": "H3KitSelfLiftSampler"
       },
       "widgets_values": [
@@ -4599,7 +4599,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.15",
+        "ver": "0.0.16",
         "Node name for S&R": "H3KitSemanticBridge"
       },
       "widgets_values": [
@@ -4685,7 +4685,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.15",
+        "ver": "0.0.16",
         "Node name for S&R": "H3KitSemanticBridge"
       },
       "widgets_values": [

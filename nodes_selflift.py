@@ -37,9 +37,9 @@ class H3KitSelfLiftSampler:
                 "sigmas": ("SIGMAS", {"tooltip": "可选外部调度；连接后取代 steps/scheduler/denoise，总步数和降噪强度由外部调度决定。"}),
                 "spatial_tiles": ("BOOLEAN", {"default": False,
                     "label_on": "高清采样分块：开启", "label_off": "高清采样分块：关闭",
-                    "tooltip": "仅对 SelfLift 高清采样阶段沿长边重叠分块，支持视频/音频遮罩及固定上下文续接。不影响 latent 放大或 VAE 解码。"}),
-                "minimum_tiles": ("INT", {"default": 4, "min": 2, "max": 8,
-                    "tooltip": "高清采样的最少分块数，按显存预算增加到最多 8 块；小画面受网格限制可能更少。音频取第一块预测，不支持 ControlNet。"}),
+                    "tooltip": "仅对 SelfLift 高清采样阶段按自动网格重叠分块：优先沿长边分割，实际单块长宽比不超过2:1；支持视频/音频遮罩及固定上下文续接。不影响 latent 放大或 VAE 解码。"}),
+                "minimum_tiles": ("INT", {"default": 2, "min": 2, "max": 8,
+                    "tooltip": "自动网格的最少块数，按块形状和显存预算增加到最多8块；小画面可能更少，极端长宽比无法满足2:1时提示并选最接近的布局。音频取第一块预测，不支持ControlNet。"}),
                 "context_vae": ("VAE", {"tooltip": "H3视频VAE。动作续接→SelfLift的视频续接必须连接，否则采样前报错；已接previous_frames或关闭boundary_check也不能省略。用于建立两阶段时间对齐的上下文。纯音频路径不需要；原来的SelfLift直连仍按boundary_check决定是否需要。"}),
                 "previous_frames": ("IMAGE", {"tooltip": "连接前段完整画面或末尾22帧。动作续接输入时，以这些图片的末尾22帧分别编码高清和低清上下文，避免外部视频编码截尾造成时间错位；不连接则解码原高清上下文。SelfLift直连时仍用于原来的边界检查。"}),
                 "boundary_check": ("BOOLEAN", {"default": True,
@@ -56,7 +56,7 @@ class H3KitSelfLiftSampler:
     def sample(self, model, positive, negative, latent_image, seed, steps, cfg, scheduler,
                high_resolution_steps, lowres_scale, upscale_weights,
                continue_audio, previous_latent=None, sigmas=None, denoise=1.0, sampler_name="euler",
-               spatial_tiles=False, minimum_tiles=4, context_vae=None, previous_frames=None,
+               spatial_tiles=False, minimum_tiles=2, context_vae=None, previous_frames=None,
                boundary_check=True):
         if sigmas is None:
             if denoise == 0:
