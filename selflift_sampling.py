@@ -258,21 +258,27 @@ def stage_model(model, video, audio, vm, am, prefix):
     return patched
 
 
-def learned_lift(low, size, weights):
+def learned_lift(low, size, weights, unload=True):
     device = mm.get_torch_device()
     precision = "fp32" if device.type == "cpu" else "fp16"
     network = load_upscale_network(weights, torch.device("cpu"), precision)
     patcher = comfy.model_patcher.CoreModelPatcher(network, load_device=device, offload_device=mm.unet_offload_device())
-    overlap = next((block.dwconv.kernel_size[0] for block in network.in_blocks if isinstance(block, H3KitTemporalConv)), 0)
-    window = low.shape[2] if low.shape[2] <= 32 else min(low.shape[2] + 2 * overlap, 32 + 4 * overlap)
-    budget = low.shape[0] * network.conv_in.out_channels * window * math.prod(size) * network.conv_in.weight.element_size() * 8
-    mm.load_models_gpu([patcher], memory_required=budget)
-    mean, std = make_latent_statistics(device, network.conv_in.weight.dtype)
-    x = (low.to(device=device, dtype=mean.dtype) - mean) / std
-    # GroupNorm统计包含时间维。按真实连续序列放大，不能在接缝两侧大量复制帧后分别归一化。
-    scale = (size[0] / x.shape[-2] + size[1] / x.shape[-1]) / 2
-    output = network(x, scale=scale, target_size=(x.shape[2], *size))
-    return (output * std + mean).float().to(mm.intermediate_device())
+    try:
+        overlap = next((block.dwconv.kernel_size[0] for block in network.in_blocks if isinstance(block, H3KitTemporalConv)), 0)
+        window = low.shape[2] if low.shape[2] <= 32 else min(low.shape[2] + 2 * overlap, 32 + 4 * overlap)
+        budget = low.shape[0] * network.conv_in.out_channels * window * math.prod(size) * network.conv_in.weight.element_size() * 8
+        mm.load_models_gpu([patcher], memory_required=budget)
+        mean, std = make_latent_statistics(device, network.conv_in.weight.dtype)
+        x = (low.to(device=device, dtype=mean.dtype) - mean) / std
+        # GroupNorm统计包含时间维。按真实连续序列放大，不能在接缝两侧大量复制帧后分别归一化。
+        scale = (size[0] / x.shape[-2] + size[1] / x.shape[-1]) / 2
+        output = network(x, scale=scale, target_size=(x.shape[2], *size))
+        return (output * std + mean).float().to(mm.intermediate_device())
+    finally:
+        if unload:
+            # 高清阶段紧随放大之后，不再需要放大模型；出错时也释放，避免占用高清采样显存。
+            mm.unload_model_and_clones(patcher, unload_additional_models=False)
+            mm.soft_empty_cache()
 
 
 def euler_step(state, x0, sigma, sigma_next):
@@ -295,8 +301,8 @@ def release_high_context(video, mask, lifted, prefix):
 def progressive_sample(model, positive, negative, latent, sigmas, seed, cfg,
                        high_steps, lowres_scale, weights, previous=None,
                        continue_audio=True, lifter=learned_lift, sampler_name="euler",
-                       spatial_tiles=False, minimum_tiles=2, context_vae=None, previous_frames=None,
-                       boundary_check=True):
+                       upscaler_unload=True, spatial_tiles=False, minimum_tiles=2,
+                       context_vae=None, previous_frames=None, boundary_check=True):
     if sampler_name != "euler":
         raise ValueError("当前 SelfLift 分辨率交接仅支持标准 euler。")
     if not isinstance(model.model, comfy.model_base.MiniMaxH3):
@@ -366,7 +372,7 @@ def progressive_sample(model, positive, negative, latent, sigmas, seed, cfg,
     latent_format = model.get_model_object("latent_format")
     native_low = latent_format.process_out(x0_video.float()).to(mm.intermediate_device()).clone()
     del low_model, low_latent, low, x0_video, x0_audio, state_audio, low_positive, low_negative
-    lifted = lifter(native_low, size, weights)
+    lifted = lifter(native_low, size, weights, unload=upscaler_unload)
     lifted[:, :, :prefix].copy_(video[:, :, :prefix].to(lifted))
     if external_context:
         release_high_context(video, vm, lifted, prefix)
