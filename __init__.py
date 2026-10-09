@@ -5,7 +5,8 @@ from .nodes_av_join import H3KitAVJoin
 from .nodes_vae_decode import H3KitVAEDecodeTiled
 from .nodes_selflift import H3KitSelfLiftSampler
 from .nodes_loop import H3KitStartLoop, H3KitEndLoop, H3KitLoopIteration, H3KitLoopProgress, H3KitLoopResult
-from .nodes_audio import H3KitAudioListToBatch, H3KitAudioFrameSync
+from .nodes_audio import H3KitAudioListToBatch, H3KitAudioFrameSync, H3KitAudioSegment, H3KitAudioSegments
+from .nodes_text import H3KitTextSegment, H3KitTextSegments
 from .nodes_reference import H3KitReferencePromptLength
 from .nodes_semantic_bridge import H3KitSemanticBridge
 
@@ -23,6 +24,10 @@ NODE_CLASS_MAPPINGS = {
     "H3KitLoopResult": H3KitLoopResult,
     "H3KitAudioListToBatch": H3KitAudioListToBatch,
     "H3KitAudioFrameSync": H3KitAudioFrameSync,
+    "H3KitAudioSegment": H3KitAudioSegment,
+    "H3KitAudioSegments": H3KitAudioSegments,
+    "H3KitTextSegment": H3KitTextSegment,
+    "H3KitTextSegments": H3KitTextSegments,
     "H3KitReferencePromptLength": H3KitReferencePromptLength,
     "H3KitSemanticBridge": H3KitSemanticBridge,
 }
@@ -38,6 +43,10 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "H3KitEndLoop": "H3Kit End Loop 多路循环结束",
     "H3KitAudioListToBatch": "H3Kit 声音列表到声音批次",
     "H3KitAudioFrameSync": "H3Kit 音频帧率同步",
+    "H3KitAudioSegment": "H3Kit 音频分段与帧数计算（支持循环）",
+    "H3KitAudioSegments": "H3Kit 音频分段与帧数计算（不支持循环）",
+    "H3KitTextSegment": "H3Kit 文本分段（支持循环）",
+    "H3KitTextSegments": "H3Kit 文本分段（不支持循环）",
     "H3KitReferencePromptLength": "H3Kit 提示词与长度替换",
     "H3KitSemanticBridge": "H3Kit 语义桥（Semantic Bridge）",
 }
