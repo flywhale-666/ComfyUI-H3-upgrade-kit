@@ -11,28 +11,28 @@ def audio_segment_plan(samples, sample_rate, segment_seconds):
     frames += (5 - frames) % 17
 
     # 用累计帧数换算采样点，避免逐段取整导致丢失或重复采样点。
-    def boundary(index):
-        return (index * frames * sample_rate + 12) // 24
+    def boundary(audio_frames):
+        return (audio_frames * sample_rate + 12) // 24
 
-    full_segments = samples * 24 // (frames * sample_rate)
-    if boundary(full_segments + 1) <= samples:
-        full_segments += 1
-    count = full_segments + (boundary(full_segments) < samples)
     plan = []
-    for index in range(count):
-        start = boundary(index)
-        if index == full_segments:
-            seconds = max(3, math.ceil((samples - start) / sample_rate))
-            actual_frames = seconds * 24
+    start, elapsed_frames = 0, 0
+    while start < samples:
+        trim_frames = 5 if plan else 0
+        actual_frames = frames
+        seconds = segment_seconds
+        audio_frames = actual_frames - trim_frames
+        end = boundary(elapsed_frames + audio_frames)
+        if end > samples:
+            seconds = max(3, (samples - start + sample_rate - 1) // sample_rate)
+            # 末段按音频需要的整数秒数补齐，再加回模型输入与交付的5帧差。
+            actual_frames = seconds * 24 + trim_frames
             actual_frames += (5 - actual_frames) % 17
+            audio_frames = actual_frames - trim_frames
             end = samples
-        else:
-            seconds = segment_seconds
-            actual_frames = frames
-            end = boundary(index + 1)
-        target_samples = ((actual_frames * sample_rate + 12) // 24
-                          if index == full_segments else end - start)
+        target_samples = boundary(elapsed_frames + audio_frames) - start
         plan.append((start, end, actual_frames, target_samples, seconds))
+        elapsed_frames += audio_frames
+        start = end
     return plan
 
 
@@ -65,7 +65,7 @@ class H3KitAudioSegment:
             "required": {
                 "audio": ("AUDIO", {"tooltip": "连接完整音频；保持原采样率、声道和音高。"}),
                 "segment_seconds": ("INT", {"default": 9, "min": 3, "max": 150, "step": 1,
-                    "tooltip": "每段的目标整数秒数，最低 3 秒。按 24fps 向上对齐 17N+5 帧后，以实际时长连续切分音频。"}),
+                    "tooltip": "每段目标整数秒数，最低 3 秒。模型帧数向上对齐 17N+5；首段音频为帧数/24秒，第二段起为(帧数-5)/24秒，并按音频实际时长连续切分。"}),
                 "segment_index_from_second": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff,
                     "tooltip": "从第二段开始的索引：0 是第二段，1 是第三段。首段始终从 first_* 独立输出。"}),
             },
@@ -76,7 +76,7 @@ class H3KitAudioSegment:
                     "audio", "frame_count", "duration", "segment_count", "segment_info")
     FUNCTION = "split"
     CATEGORY = "H3 Upgrade Kit/音频"
-    DESCRIPTION = "按 H3 的 24fps、17N+5 帧规则连续分段。first_* 始终输出首段；audio、frame_count、duration 从第二段起按 segment_index_from_second 选择，0 对应第二段。segment_count 只统计后续片段。末段向上取整数秒、最低 3 秒，再对齐合法帧数并补静音。"
+    DESCRIPTION = "first_* 独立输出首段；第二段起按索引选择，0 对应第二段。frame_count 是17N+5模型输入帧数；duration 是音频实际时长，第二段起为(帧数-5)/24秒。按实际音频时长连续取片，不丢失、不重复。末段补帧或补静音，仍保持音频比模型帧数少5帧。segment_count 只统计后续段数。"
 
     def split(self, audio, segment_seconds=9, segment_index_from_second=0):
         plan = audio_input_segment_plan(audio, segment_seconds)
@@ -94,13 +94,15 @@ class H3KitAudioSegment:
             frames = plan[segment_index_from_second + 1][2]
         selected = str(segment_index_from_second) if remaining_count else "无"
         lines = [f"原音频：{samples / sample_rate:.6f} 秒；共 {len(plan)} 段（首段独立，后续 {remaining_count} 段）；当前后续索引：{selected}",
-                 "片段 / 后续索引 | 原音频范围（秒） | 整数目标（秒） | 实际帧数 | 实际时长（秒） | 补静音（秒）"]
+                 "片段 / 后续索引 | 原音频范围（秒） | 整数目标（秒） | 模型输入帧数 | 音频实际时长（秒） | 补静音（秒）"]
         for index, (begin, stop, frame_count, length, seconds) in enumerate(plan):
             label = "首段（独立）" if index == 0 else f"第 {index + 1} 段 / {index - 1}"
+            duration = (frame_count - (5 if index else 0)) / 24
             lines.append(f"{label} | {begin / sample_rate:.6f}–{stop / sample_rate:.6f} | {seconds} | "
-                         f"{frame_count} | {frame_count / 24:.6f} | {(length - (stop - begin)) / sample_rate:.6f}")
+                         f"{frame_count} | {duration:.6f} | {(length - (stop - begin)) / sample_rate:.6f}")
         return (first_audio, first_frames, first_frames / 24,
-                selected_audio, frames, frames / 24, remaining_count, "\n".join(lines))
+                selected_audio, frames, (frames - 5) / 24 if remaining_count else 0.0,
+                remaining_count, "\n".join(lines))
 
 
 class AudioSegmentOutputTypes(tuple):
@@ -123,14 +125,15 @@ class H3KitAudioSegments:
     FUNCTION = "split"
     CATEGORY = "H3 Upgrade Kit/音频"
     OUTPUT_NODE = True
-    DESCRIPTION = "直接输出全部音频片段，不需要循环或索引。首次运行后，按实际段数展开 N_audio、N_frame_count、N_duration 三个端口。按 24fps、17N+5 帧规则连续切分；末段向上取整数秒、最低 3 秒，再对齐帧数并补静音。"
+    DESCRIPTION = "直接输出全部片段，首次运行后按段数展开 N_audio、N_frame_count、N_duration。frame_count 是17N+5模型输入帧数，duration 是实际音频时长：首段为帧数/24秒，第二段起为(帧数-5)/24秒。按实际音频时长连续切分；末段补帧或补静音，第二段起始终保留5帧差额。"
 
     def split(self, audio, segment_seconds=9):
         plan = audio_input_segment_plan(audio, segment_seconds)
         outputs = []
-        for entry in plan:
+        for index, entry in enumerate(plan):
             frames = entry[2]
-            outputs.extend((audio_segment_clip(audio, entry), frames, frames / 24))
+            duration = (frames - (5 if index else 0)) / 24
+            outputs.extend((audio_segment_clip(audio, entry), frames, duration))
         return {"ui": {"segment_count": [len(plan)]}, "result": tuple(outputs)}
 
 
