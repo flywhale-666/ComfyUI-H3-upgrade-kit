@@ -128,13 +128,19 @@ SelfLift 把一次采样分成低清和高清两个阶段：**先在较低分辨
 | `steps` | 总采样步数，按模型与 LoRA 选择 |
 | `high_resolution_steps` | 留给高清阶段的步数 |
 | `lowres_scale` | 低清阶段的宽高比例，例如 `0.5` |
-| `upscale_weights` | H3 潜空间放大权重 |
+| `seed` | 低清和高清阶段均使用此种子 |
+| `upscale_weights` | H3 潜空间放大权重；SelfLift 按权重实际精度运行，保留 BF16、FP16 或 FP32 |
 | `context_vae` | 直连时用于边界检查及低清校准；外部视频续接时用于建立时间对齐的高清、低清上下文 |
 | `boundary_check` | 是否检查并校准上下文；开启时需要连接 `context_vae`，不接 VAE 时请关闭 |
 | `previous_frames` | 配合 `context_vae` 接前段解码画面，可省去一次重复解码 |
 | `continue_audio` | 开启时对接缝尾音做平滑过渡 |
-| `spatial_tiles` | 是否在高清采样阶段启用空间分块，默认关闭 |
+| `upscale_spatial_tiles` | 独立控制 latent 放大分块，默认关闭以保留整幅放大的细节；局部归一化和重叠融合可能损失清晰度，建议仅在放大显存不足时开启 |
+| `spatial_tiles` | 仅控制高清采样的空间分块，默认关闭 |
 | `minimum_tiles` | 高清采样自动网格最少块数，默认 2；按形状和显存规划最多 8 块，小画面可能更少 |
+
+**两个分块开关独立使用。** 界面中“latent放大分块”位于“高清采样分块”上方。放大分块逐块推理，在 CPU 内存中融合结果，显存不足时自动缩小放大块；`minimum_tiles` 仅影响高清采样，不控制放大块数量。空间分块沿画面宽高划分，与 `17N+5` 的视频帧数规则不同；小尺寸输入可能只需一块，开启后的结果差异也可能不明显。
+
+**更新已有工作流：** 更新后重启 ComfyUI 并刷新页面。旧版 SelfLift 的控件顺序与当前版本不同，请重新创建 SelfLift 节点、接回原有连线，并核对种子、两个分块开关、`minimum_tiles` 和 `boundary_check`。本仓库示例已按当前顺序整理，latent 放大分块默认关闭。
 
 **段长按目标帧数填写。** 续段新增长度按模型周期向下对齐。两段目标各124帧，交付124＋119＝243帧；内部增加22帧上下文，由拼接节点自动裁除。
 
@@ -296,7 +302,7 @@ End Loop 的输入按 `output_value`、`next_iteration_value`、`termination` �
 
 空间分块会限制各块可见的视频区域，属于近似计算，不等价于普通 K 采；已有画面低噪声续采也可能产生构图或细节差异。完整采样通过内部计算分批保留全局关系，显存需求通常高于空间裁块。
 
-关闭 `spatial_tiles` 时使用原生高级自定义采样。分块不代替 VAE 分块解码；SelfLift 的高清阶段仍使用空间分块。
+关闭 `spatial_tiles` 时使用原生高级自定义采样。SelfLift 的高清采样分块由其自身的 `spatial_tiles` 控制；latent 放大分块由 `upscale_spatial_tiles` 独立控制。两者均不代替 VAE 分块解码。
 
 ### 动作续接与音画裁剪拼接
 

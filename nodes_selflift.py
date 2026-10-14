@@ -35,9 +35,12 @@ class H3KitSelfLiftSampler:
             "optional": {
                 "previous_latent": ("LATENT", {"tooltip": "仅用于直接串联前一个SelfLift的sampled_latent，保留低清和高清状态。外部视频或普通K采经动作续接接入latent_image时，此处留空。"}),
                 "sigmas": ("SIGMAS", {"tooltip": "可选外部调度；连接后取代 steps/scheduler/denoise，总步数和降噪强度由外部调度决定。"}),
+                "upscale_spatial_tiles": ("BOOLEAN", {"default": False,
+                    "label_on": "latent放大分块：开启", "label_off": "latent放大分块：关闭",
+                    "tooltip": "仅控制学习型 latent 放大的空间分块，默认关闭以保留整幅放大的细节。开启可降低显存占用，但局部归一化与重叠融合可能损失清晰度；显存不足时自动缩小放大块，可能进一步影响画质。独立于高清采样分块。"}),
                 "spatial_tiles": ("BOOLEAN", {"default": False,
                     "label_on": "高清采样分块：开启", "label_off": "高清采样分块：关闭",
-                    "tooltip": "仅对 SelfLift 高清采样阶段按自动网格重叠分块：优先沿长边分割，实际单块长宽比不超过2:1；支持视频/音频遮罩及固定上下文续接。不影响 latent 放大或 VAE 解码。"}),
+                    "tooltip": "仅控制高清采样的空间分块：按自动网格重叠分块，优先沿长边分割，实际单块长宽比不超过2:1。支持视频/音频遮罩及固定上下文续接；latent 放大分块由 upscale_spatial_tiles 单独控制，不影响 VAE 解码。"}),
                 "minimum_tiles": ("INT", {"default": 2, "min": 2, "max": 8,
                     "tooltip": "自动网格的最少块数，按块形状和显存预算增加到最多8块；小画面可能更少，极端长宽比无法满足2:1时提示并选最接近的布局。音频取第一块预测，不支持ControlNet。"}),
                 "context_vae": ("VAE", {"tooltip": "H3视频VAE。动作续接→SelfLift的视频续接必须连接，否则采样前报错；已接previous_frames或关闭boundary_check也不能省略。用于建立两阶段时间对齐的上下文。纯音频路径不需要；原来的SelfLift直连仍按boundary_check决定是否需要。"}),
@@ -57,7 +60,7 @@ class H3KitSelfLiftSampler:
                high_resolution_steps, lowres_scale, upscale_weights,
                continue_audio, previous_latent=None, sigmas=None, denoise=1.0, sampler_name="euler",
                spatial_tiles=False, minimum_tiles=2, context_vae=None, previous_frames=None,
-               boundary_check=True):
+               boundary_check=True, upscale_spatial_tiles=False):
         if sigmas is None:
             if denoise == 0:
                 return (latent_image,)
@@ -67,4 +70,5 @@ class H3KitSelfLiftSampler:
                                    previous_latent, continue_audio, sampler_name=sampler_name,
                                    spatial_tiles=spatial_tiles, minimum_tiles=minimum_tiles,
                                    context_vae=context_vae, previous_frames=previous_frames,
-                                   boundary_check=boundary_check),)
+                                   boundary_check=boundary_check,
+                                   upscale_spatial_tiles=upscale_spatial_tiles),)

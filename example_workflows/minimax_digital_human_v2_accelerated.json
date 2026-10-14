@@ -3508,6 +3508,7 @@
         0.5,
         "minimax_h3_latent_upscaler_3d_bf16.safetensors",
         true,
+        false,
         true,
         4,
         true
@@ -3524,6 +3525,7 @@
         "lowres_scale": 0.5,
         "upscale_weights": "minimax_h3_latent_upscaler_3d_bf16.safetensors",
         "continue_audio": true,
+        "upscale_spatial_tiles": false,
         "spatial_tiles": true,
         "minimum_tiles": 4,
         "boundary_check": true
@@ -3746,6 +3748,7 @@
         0.5,
         "minimax_h3_latent_upscaler_3d_bf16.safetensors",
         true,
+        false,
         true,
         4,
         true
@@ -3762,6 +3765,7 @@
         "lowres_scale": 0.5,
         "upscale_weights": "minimax_h3_latent_upscaler_3d_bf16.safetensors",
         "continue_audio": true,
+        "upscale_spatial_tiles": false,
         "spatial_tiles": true,
         "minimum_tiles": 4,
         "boundary_check": true

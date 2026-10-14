@@ -18,7 +18,7 @@ from comfy.nested_tensor import NestedTensor
 from comfy.patcher_extension import WrappersMP
 import latent_preview
 
-from .nodes_latent_upscale import H3KitTemporalConv, load_upscale_network, make_latent_statistics
+from .nodes_latent_upscale import H3KitTemporalConv, load_upscale_network, make_latent_statistics, upscale_spatial_volume
 from .native_context import native_video_tail, decoded_video_tail, pixel_frames, continuation_size, CONTEXT_FRAMES, CONTEXT_TOKENS, TOKEN_PERIOD
 from .sampling_tiles import create_tiled_patcher
 
@@ -258,19 +258,24 @@ def stage_model(model, video, audio, vm, am, prefix):
     return patched
 
 
-def learned_lift(low, size, weights):
+def learned_lift(low, size, weights, spatial_tiles=False):
     device = mm.get_torch_device()
-    precision = "fp32" if device.type == "cpu" else "fp16"
-    network = load_upscale_network(weights, torch.device("cpu"), precision)
+    network = load_upscale_network(weights, torch.device("cpu"), "auto")
     patcher = comfy.model_patcher.CoreModelPatcher(network, load_device=device, offload_device=mm.unet_offload_device())
     overlap = next((block.dwconv.kernel_size[0] for block in network.in_blocks if isinstance(block, H3KitTemporalConv)), 0)
     window = low.shape[2] if low.shape[2] <= 32 else min(low.shape[2] + 2 * overlap, 32 + 4 * overlap)
-    budget = low.shape[0] * network.conv_in.out_channels * window * math.prod(size) * network.conv_in.weight.element_size() * 8
+    batch = 1 if spatial_tiles else low.shape[0]
+    # 放大块目标边长约64；非整数缩放的边界取整可能多占一个位置。
+    area = math.prod(min(s, 65) for s in size) if spatial_tiles else math.prod(size)
+    budget = batch * network.conv_in.out_channels * window * area * network.conv_in.weight.element_size() * 8
     mm.load_models_gpu([patcher], memory_required=budget)
+    scale = (size[0] / low.shape[-2] + size[1] / low.shape[-1]) / 2
+    if spatial_tiles:
+        output = upscale_spatial_volume(network, low.to(device="cpu"), scale, (low.shape[2], *size))
+        return output.to(mm.intermediate_device())
     mean, std = make_latent_statistics(device, network.conv_in.weight.dtype)
     x = (low.to(device=device, dtype=mean.dtype) - mean) / std
     # GroupNorm统计包含时间维。按真实连续序列放大，不能在接缝两侧大量复制帧后分别归一化。
-    scale = (size[0] / x.shape[-2] + size[1] / x.shape[-1]) / 2
     output = network(x, scale=scale, target_size=(x.shape[2], *size))
     return (output * std + mean).float().to(mm.intermediate_device())
 
@@ -296,7 +301,7 @@ def progressive_sample(model, positive, negative, latent, sigmas, seed, cfg,
                        high_steps, lowres_scale, weights, previous=None,
                        continue_audio=True, lifter=learned_lift, sampler_name="euler",
                        spatial_tiles=False, minimum_tiles=2, context_vae=None, previous_frames=None,
-                       boundary_check=True):
+                       boundary_check=True, upscale_spatial_tiles=False):
     if sampler_name != "euler":
         raise ValueError("当前 SelfLift 分辨率交接仅支持标准 euler。")
     if not isinstance(model.model, comfy.model_base.MiniMaxH3):
@@ -366,12 +371,12 @@ def progressive_sample(model, positive, negative, latent, sigmas, seed, cfg,
     latent_format = model.get_model_object("latent_format")
     native_low = latent_format.process_out(x0_video.float()).to(mm.intermediate_device()).clone()
     del low_model, low_latent, low, x0_video, x0_audio, state_audio, low_positive, low_negative
-    lifted = lifter(native_low, size, weights)
+    lifted = lifter(native_low, size, weights, spatial_tiles=upscale_spatial_tiles)
     lifted[:, :, :prefix].copy_(video[:, :, :prefix].to(lifted))
     if external_context:
         release_high_context(video, vm, lifted, prefix)
     high_x0 = latent_format.process_in(lifted)
-    noise = comfy.sample.prepare_noise(high_x0, (seed + 1) % (1 << 64), latent.get("batch_index")).to(high_x0)
+    noise = comfy.sample.prepare_noise(high_x0, seed, latent.get("batch_index")).to(high_x0)
     video_next = euler_step(sampling.noise_scaling(sigma, noise, high_x0), high_x0, sigma, next_sigma)
     high_anchor = NestedTensor([video, audio])
     anchors = model.model.process_latent_in(high_anchor).unbind()

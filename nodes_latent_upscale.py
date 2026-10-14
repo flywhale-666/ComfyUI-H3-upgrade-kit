@@ -363,6 +363,8 @@ def load_upscale_network(name, device, precision, memory_required=0):
             temporal_every=cfg["temporal_every"], temporal_kernel=cfg["temporal_kernel"],
         )
     model.load_state_dict(up_sd, strict=True, assign=True)
+    if precision == "auto":
+        precision = {torch.float32: "fp32", torch.float16: "fp16", torch.bfloat16: "bf16"}[model.conv_in.weight.dtype]
     dtype = {"fp32": torch.float32, "fp16": torch.float16, "bf16": torch.bfloat16}.get(precision, torch.float32)
     if memory_required and device.type != "cpu":
         weight_bytes = sum(p.numel() for p in model.parameters()) * dtype.itemsize
@@ -422,6 +424,21 @@ def upscale_tiled_volume(model, samples, scale, target_size, enable_chunking, ti
                 del tile, result
     output.div_(weights)
     return output
+
+
+def upscale_spatial_volume(model, samples, scale, target_size, enable_chunking=True):
+    tile_size = max(8, min(32, math.floor(64 / max(target_size[-2] / samples.shape[-2],
+                                                target_size[-1] / samples.shape[-1]))))
+    while True:
+        try:
+            return upscale_tiled_volume(model, samples, scale, target_size, enable_chunking, tile_size)
+        except torch.OutOfMemoryError:
+            if model.conv_in.weight.device.type != "cuda" or tile_size <= 8:
+                raise
+        tile_size = max(8, tile_size // 2)
+        print(f"[H3Kit Upscale] VRAM insufficient; retrying with tile={tile_size}")
+        gc.collect()
+        mm.soft_empty_cache()
 
 # ==========================================
 # ComfyUI node (new API)
@@ -558,19 +575,8 @@ class H3KitLatentUpscale3D(io.ComfyNode):
         model = load_upscale_network(upscale_weights, compute_device, compute_precision, memory_required=2 * 1024**3 if spatial_tiles else 0)
         try:
             if spatial_tiles:
-                tile_size = max(8, min(32, math.floor(64 / max(h_out / h_in, w_out / w_in))))
-                while True:
-                    try:
-                        upscaled_samples = upscale_tiled_volume(model, working_samples, effective_scale, (t, h_out, w_out),
-                                                    temporal_chunks, tile_size)
-                        break
-                    except torch.OutOfMemoryError:
-                        if compute_device.type != "cuda" or tile_size <= 8:
-                            raise
-                    tile_size = max(8, tile_size // 2)
-                    print(f"[H3Kit Upscale] VRAM insufficient; retrying with tile={tile_size}")
-                    gc.collect()
-                    mm.soft_empty_cache()
+                upscaled_samples = upscale_spatial_volume(model, working_samples, effective_scale,
+                                                         (t, h_out, w_out), temporal_chunks)
             else:
                 norm_mean, norm_std = make_latent_statistics(compute_device, compute_dtype)
                 s_norm = (working_samples - norm_mean) / norm_std
