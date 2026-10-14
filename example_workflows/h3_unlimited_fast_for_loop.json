@@ -2820,7 +2820,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.17",
+        "ver": "0.0.20",
         "Node name for S&R": "H3KitSelfLiftSampler"
       },
       "widgets_values": [
@@ -3060,7 +3060,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.17",
+        "ver": "0.0.20",
         "Node name for S&R": "H3KitSelfLiftSampler"
       },
       "widgets_values": [
