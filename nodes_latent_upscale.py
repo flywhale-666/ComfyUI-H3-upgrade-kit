@@ -184,7 +184,7 @@ class H3KitResizeNetwork(nn.Module):
         self.norm_out = upscale_group_norm(channels)
         self.conv_out = nn.Conv3d(channels, in_channels, 3, padding=1)
 
-    def forward(self, x, scale=None, target_size=None, enable_chunking=True):
+    def forward(self, x, scale=None, target_size=None, enable_chunking=True, spatial_grid=None):
         if target_size is not None:
             size = target_size
         elif scale is not None:
@@ -192,7 +192,7 @@ class H3KitResizeNetwork(nn.Module):
         else:
             return x
 
-        if size == x.shape[-3:]:
+        if size == x.shape[-3:] and (spatial_grid is None or spatial_grid[-1] == 1):
             return x
 
         B, C, T, H, W = x.shape
@@ -207,7 +207,7 @@ class H3KitResizeNetwork(nn.Module):
         chunk = 32
 
         if not enable_chunking or T <= chunk:
-            return self._forward_seg(x, scale, size)
+            return self._forward_seg(x, scale, size, spatial_grid)
 
         print(f"[H3Kit Upscale] temporal chunking: T={T} chunks={(T + chunk - 1) // chunk} overlap={overlap}")
 
@@ -227,7 +227,7 @@ class H3KitResizeNetwork(nn.Module):
 
             seg = x_padded[:, :, lo:hi].contiguous()
             seg_size = (hi - lo, size[-2], size[-1])
-            seg_out = self._forward_seg(seg, scale, seg_size)
+            seg_out = self._forward_seg(seg, scale, seg_size, spatial_grid)
 
             s0 = (out_start + overlap) - lo
             s1 = s0 + (out_end - out_start)
@@ -253,7 +253,7 @@ class H3KitResizeNetwork(nn.Module):
         out_full = out_full / weight_full.clamp(min=1e-8)
         return out_full
 
-    def _forward_seg(self, x, scale, size):
+    def _forward_seg(self, x, scale, size, spatial_grid=None):
         scale_emb = torch.tensor(
             [scale - 1 if scale is not None else 0.0],
             dtype=x.dtype, device=x.device).unsqueeze(0)
@@ -267,7 +267,8 @@ class H3KitResizeNetwork(nn.Module):
             else:
                 x = b(x)
 
-        x = F.interpolate(x, size=size, mode="trilinear", align_corners=False)
+        x = (F.interpolate(x, size=size, mode="trilinear", align_corners=False)
+             if spatial_grid is None else resize_on_global_grid(x, size, spatial_grid))
 
         for b in self.out_blocks:
             if isinstance(b, H3KitResidual3D):
@@ -378,21 +379,52 @@ def load_upscale_network(name, device, precision, memory_required=0):
           f"Backend: {backend_lbl} | Precision: {precision}")
     return model
 
-def upscale_tile_regions(length, target, tile_size, overlap):
+def upscale_tile_regions(length, target, tile_size, overlap, spatial_scale=None):
     starts = range(0, max(1, length - overlap), tile_size - overlap) if length > tile_size else [0]
     # Map both boundaries so fractional scaling covers the exact target size.
-    regions = [(start, min(start + tile_size, length), round(start * target / length),
-                round(min(start + tile_size, length) * target / length)) for start in starts]
+    if spatial_scale is None:
+        regions = [(start, min(start + tile_size, length), round(start * target / length),
+                    round(min(start + tile_size, length) * target / length)) for start in starts]
+    else:
+        offset = (target - length * spatial_scale) / 2
+        regions = [(start, min(start + tile_size, length),
+                    0 if start == 0 else max(0, round(start * spatial_scale + offset)),
+                    target if start + tile_size >= length else min(target, round((start + tile_size) * spatial_scale + offset)))
+                   for start in starts]
     return [region for region in regions if region[3] > region[2]]
 
 
-def upscale_tiled_volume(model, samples, scale, target_size, enable_chunking, tile_size):
+def global_coordinates(start, count, source, target, scale, device=None):
+    index = torch.arange(start, start + count, dtype=torch.float32, device=device)
+    return (index - (target - 1) / 2) / scale + (source - 1) / 2
+
+
+def resize_on_global_grid(samples, size, grid):
+    source_h, source_w, target_h, target_w, y0, x0, oy0, ox0, scale = grid
+    if samples.shape[2] != size[0]:
+        raise ValueError("空间放大不能改变 latent 时间轴。")
+    for axis, source, target, origin, offset, count in (
+        (-2, source_h, target_h, y0, oy0, size[-2]),
+        (-1, source_w, target_w, x0, ox0, size[-1]),
+    ):
+        coord = (global_coordinates(offset, count, source, target, scale, samples.device)
+                 - origin).clamp(0, samples.shape[axis] - 1)
+        first = coord.floor().long()
+        second = (first + 1).clamp(max=samples.shape[axis] - 1)
+        shape = [1] * samples.ndim
+        shape[axis] = count
+        fraction = (coord - first).to(samples.dtype).reshape(shape)
+        samples = torch.lerp(samples.index_select(axis, first), samples.index_select(axis, second), fraction)
+    return samples
+
+
+def upscale_tiled_volume(model, samples, scale, target_size, enable_chunking, tile_size, spatial_scale=None):
     device, dtype = model.conv_in.weight.device, model.conv_in.weight.dtype
     batch, channels, frames, height, width = samples.shape
     _, out_h, out_w = target_size
     overlap = max(1, tile_size // 4)
-    rows = upscale_tile_regions(height, out_h, tile_size, overlap)
-    cols = upscale_tile_regions(width, out_w, tile_size, overlap)
+    rows = upscale_tile_regions(height, out_h, tile_size, overlap, spatial_scale)
+    cols = upscale_tile_regions(width, out_w, tile_size, overlap, spatial_scale)
     mean, std = make_latent_statistics(device, dtype)
     # Full output and blending buffers stay on CPU; only one tile lives on GPU.
     output = torch.zeros((batch, channels, frames, out_h, out_w), dtype=torch.float32, device="cpu")
@@ -412,26 +444,38 @@ def upscale_tiled_volume(model, samples, scale, target_size, enable_chunking, ti
                     window.narrow(axis, 0, feather).mul_(ramp.reshape(shape))
                 if end < total:
                     window.narrow(axis, window.shape[axis] - feather, feather).mul_(ramp.flip(0).reshape(shape))
+            options = {}
+            if spatial_scale is not None:
+                options["spatial_grid"] = (height, width, out_h, out_w, y0, x0, oy0, ox0, spatial_scale)
+                # 边缘没有完整插值邻域时由重叠块补足；整幅画布的边缘仍按原方式钳位。
+                for start, stop, source, target, origin, limit, shape in (
+                    (oy0, oy1, height, out_h, y0, y1, (-1, 1)),
+                    (ox0, ox1, width, out_w, x0, x1, (1, -1)),
+                ):
+                    coord = global_coordinates(start, stop - start, source, target, spatial_scale)
+                    supported = ((coord >= origin) | (origin == 0)) & ((coord <= limit - 1) | (limit == source))
+                    window.mul_(supported.reshape(shape))
             weights[oy0:oy1, ox0:ox1].add_(window)
             for index in range(batch):
                 mm.throw_exception_if_processing_interrupted()
                 tile = samples[index:index + 1, :, :, y0:y1, x0:x1].to(device=device, dtype=dtype).contiguous()
                 tile = (tile - mean) / std
                 result = model(tile, scale=scale, target_size=(frames, oy1 - oy0, ox1 - ox0),
-                               enable_chunking=enable_chunking)
+                               enable_chunking=enable_chunking, **options)
                 result = (result * std + mean).to(device="cpu", dtype=torch.float32)
                 output[index:index + 1, :, :, oy0:oy1, ox0:ox1].add_(result * window)
                 del tile, result
+    if spatial_scale is not None and (weights <= 0).any():
+        raise ValueError("SelfLift 放大分块未覆盖完整空间网格。")
     output.div_(weights)
     return output
 
 
-def upscale_spatial_volume(model, samples, scale, target_size, enable_chunking=True):
-    tile_size = max(8, min(32, math.floor(64 / max(target_size[-2] / samples.shape[-2],
-                                                target_size[-1] / samples.shape[-1]))))
+def upscale_spatial_volume(model, samples, scale, target_size, enable_chunking=True, spatial_scale=None):
+    tile_size = upscale_tile_size(samples.shape[-2:], target_size[-2:], spatial_scale)
     while True:
         try:
-            return upscale_tiled_volume(model, samples, scale, target_size, enable_chunking, tile_size)
+            return upscale_tiled_volume(model, samples, scale, target_size, enable_chunking, tile_size, spatial_scale)
         except torch.OutOfMemoryError:
             if model.conv_in.weight.device.type != "cuda" or tile_size <= 8:
                 raise
@@ -439,6 +483,11 @@ def upscale_spatial_volume(model, samples, scale, target_size, enable_chunking=T
         print(f"[H3Kit Upscale] VRAM insufficient; retrying with tile={tile_size}")
         gc.collect()
         mm.soft_empty_cache()
+
+
+def upscale_tile_size(source, target, spatial_scale=None):
+    scale = spatial_scale if spatial_scale is not None else max(dst / src for src, dst in zip(source, target))
+    return max(8, min(32, math.floor(64 / scale)))
 
 # ==========================================
 # ComfyUI node (new API)

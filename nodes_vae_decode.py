@@ -10,6 +10,7 @@ import torch
 
 from comfy import model_management
 from comfy.ldm.minimax.vae import MiniMaxH3VideoVAE
+from .selflift_boundary import prepare_video_decode
 
 
 def decode_h3_tile_batches(decoder, tile_iterator, batch_state):
@@ -38,7 +39,7 @@ def decode_h3_tile_batches(decoder, tile_iterator, batch_state):
         logging.warning("[H3Kit VAE] 显存不足，合批降为 %d 块后重试。", batch_state["limit"])
 
 
-def decode_h3_scheduled_tiles(decoder, samples, *, schedule_height, batch_state):
+def decode_h3_scheduled_tiles(decoder, samples, frames=slice(None), *, schedule_height, batch_state):
     """调度跨度可变，模型始终读取原生 256 窗口；拼接顺序与原生相同。"""
     height, width = (size * decoder.vae_ratio for size in samples.shape[-2:])
     row_starts, row_sizes, row_overlaps = decoder.split_tiles(height)
@@ -70,7 +71,7 @@ def decode_h3_scheduled_tiles(decoder, samples, *, schedule_height, batch_state)
         left_tail = None
         output_x = 0
         for column in range(len(col_starts)):
-            tile = next(tile_stream)
+            tile = next(tile_stream)[:, :, frames]
             if row < len(row_starts) - 1:
                 next_row_tails.append(tile[..., -row_overlaps[row]:, :].clone())
             next_left = tile[..., :, -col_overlaps[column]:].clone() if column < len(col_starts) - 1 else None
@@ -126,7 +127,7 @@ class H3KitVAEDecodeTiled:
         decoder = video_vae.first_stage_model
         if not isinstance(decoder, MiniMaxH3VideoVAE):
             raise ValueError("H3Kit VAE：请连接 MiniMax H3 视频 VAE，不能使用音频 VAE 或其他视频模型的 VAE。")
-        video_samples = video_latent["samples"]
+        video_samples = prepare_video_decode(video_latent)["samples"]
         if video_samples.is_nested:
             video_samples = video_samples.unbind()[0]
         if video_samples.ndim != 5 or video_samples.shape[1] != 24:

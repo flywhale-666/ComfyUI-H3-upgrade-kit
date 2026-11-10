@@ -2,6 +2,7 @@
 
 import math
 import logging
+import gc
 
 import torch
 import torch.nn.functional as F
@@ -18,9 +19,14 @@ from comfy.nested_tensor import NestedTensor
 from comfy.patcher_extension import WrappersMP
 import latent_preview
 
-from .nodes_latent_upscale import H3KitTemporalConv, load_upscale_network, make_latent_statistics, upscale_spatial_volume
-from .native_context import native_video_tail, decoded_video_tail, pixel_frames, continuation_size, CONTEXT_FRAMES, CONTEXT_TOKENS, TOKEN_PERIOD
+from .nodes_latent_upscale import (
+    H3KitTemporalConv, load_upscale_network, make_latent_statistics, upscale_spatial_volume, upscale_tile_size,
+)
+from .nodes_selflift_guide import strip_low_guides, take_low_guide
+from .native_context import native_video_tail, decoded_video_tail, pixel_frames, continuation_size, CONTEXT_FRAMES, CONTEXT_TOKENS
 from .sampling_tiles import create_tiled_patcher
+from .selflift_boundary import anchor_prefix, attach_decode_prefix, prepare_video_decode
+from .selflift_geometry import fit_lifted_video, lift_geometry, low_grid_size, to_low_grid
 
 
 LOW_CARRY = "h3kit_selflift_low"
@@ -37,16 +43,18 @@ def av_streams(latent):
     return video, audio
 
 
-def continuation_window(previous, context_vae=None, previous_frames=None, boundary_check=True):
+def continuation_window(previous, context_vae=None, previous_frames=None, boundary_check=True, lowres_scale=None):
     video, audio = av_streams(previous)
     low = previous.get(LOW_CARRY)
     if low is None or low.shape[:2] != video.shape[:2]:
         raise ValueError("previous_latent 需要前一个 SelfLift 的低清状态。外部视频或普通K采请先接动作续接，再将其条件和target_latent接到本节点positive和latent_image，previous_latent留空。")
     if boundary_check and previous_frames is None:
-        previous_frames = decoded_video_tail(video, context_vae)
+        decoded_previous = av_streams(prepare_video_decode(previous))[0]
+        previous_frames = decoded_video_tail(decoded_previous, context_vae)
     high_tail, _ = native_video_tail(video, context_vae, previous_frames, boundary_check)
     low_tail, _ = native_video_tail(low, context_vae, previous_frames, boundary_check,
-                                    align_to_frames=low.shape[-2:] != video.shape[-2:])
+                                    align_to_frames=low.shape[-2:] != video.shape[-2:],
+                                    lowres_scale=lowres_scale, reference_size=video.shape[-2:])
     ticks = round(CONTEXT_FRAMES * 40 / 24)
     audio_end = round(pixel_frames(video.shape[2]) * 40 / 24)
     if audio_end > audio.shape[-1] or audio_end < ticks:
@@ -108,7 +116,7 @@ def resize_video(video, size):
     return F.interpolate(video.float(), size=(video.shape[2], *size), mode="trilinear", align_corners=False).to(video)
 
 
-def encode_frame_prefix(video, vae, size, previous_frames=None):
+def encode_frame_prefix(video, vae, size, previous_frames=None, lowres_scale=None):
     if previous_frames is None:
         decoded = vae.decode(video[:, :, :CONTEXT_TOKENS])
         batches = decoded.reshape(video.shape[0], CONTEXT_FRAMES, *decoded.shape[-3:])
@@ -121,12 +129,16 @@ def encode_frame_prefix(video, vae, size, previous_frames=None):
         batches = frames.unsqueeze(0).expand(video.shape[0], -1, -1, -1, -1)
     prefixes = []
     for frames in batches:
-        pixels = F.interpolate(frames[..., :3].movedim(-1, 1), size=(size[0]*16, size[1]*16), mode="area").movedim(1, -1)
-        prefixes.append(vae.encode(pixels))
+        pixels = frames[..., :3].movedim(-1, 1)
+        if lowres_scale is None:
+            pixels = F.interpolate(pixels, size=(size[0]*16, size[1]*16), mode="area")
+        else:
+            pixels = to_low_grid(pixels, size, lowres_scale, high_size=video.shape[-2:], pixels=True)
+        prefixes.append(vae.encode(pixels.movedim(1, -1)))
     return torch.cat(prefixes, dim=0)
 
 
-def resize_conditioning(conditioning, size):
+def resize_conditioning(conditioning, size, scale):
     result = []
     for embedding, data in conditioning:
         data = data.copy()
@@ -135,11 +147,11 @@ def resize_conditioning(conditioning, size):
             for source in data["minimax_keyframes"]:
                 keyframe = source.copy()
                 latent = keyframe.get("latent")
-                if latent is not None and latent.shape[-2:] != size:
-                    if latent.ndim == 5:
-                        resized = resize_video(latent, size)
-                    else:
-                        resized = F.interpolate(latent.float(), size=size, mode="bilinear", align_corners=False).to(latent)
+                native = take_low_guide(keyframe, size, scale, latent)
+                if native is not None:
+                    keyframe["latent"] = native
+                elif latent is not None and (latent.shape[-2:] != size or scale != 1):
+                    resized = to_low_grid(latent, size, scale)
                     keyframe["latent"] = resized + latent.mean((-2, -1), keepdim=True) - resized.mean((-2, -1), keepdim=True)
                 keyframes.append(keyframe)
             data["minimax_keyframes"] = keyframes
@@ -148,7 +160,7 @@ def resize_conditioning(conditioning, size):
 
 
 def prepare_segment(latent, previous, continue_audio, context_vae=None, previous_frames=None,
-                    boundary_check=True):
+                    boundary_check=True, lowres_scale=None):
     video, audio = av_streams(latent)
     delivery_frames = pixel_frames(video.shape[2])
     prepared = latent.get("h3kit_motion_length")
@@ -181,7 +193,7 @@ def prepare_segment(latent, previous, continue_audio, context_vae=None, previous
     low = None
     soft_audio = False
     if previous is not None:
-        pv, low, pa, overlap = continuation_window(previous, context_vae, previous_frames, boundary_check)
+        pv, low, pa, overlap = continuation_window(previous, context_vae, previous_frames, boundary_check, lowres_scale)
         tokens = pv.shape[2]
         if pv.shape[:2] != video.shape[:2] or pv.shape[-2:] != video.shape[-2:]:
             raise ValueError("前后段 latent 的批次、通道和目标分辨率必须相同。")
@@ -258,50 +270,53 @@ def stage_model(model, video, audio, vm, am, prefix):
     return patched
 
 
-def learned_lift(low, size, weights, spatial_tiles=False):
+def learned_lift(low, target, weights, *, scale, spatial_tiles=True):
+    size = lift_geometry(low.shape[-2:], target, scale)
     device = mm.get_torch_device()
-    network = load_upscale_network(weights, torch.device("cpu"), "auto")
+    precision = "fp32" if device.type == "cpu" else "auto"
+    network = load_upscale_network(weights, torch.device("cpu"), precision)
     patcher = comfy.model_patcher.CoreModelPatcher(network, load_device=device, offload_device=mm.unet_offload_device())
     overlap = next((block.dwconv.kernel_size[0] for block in network.in_blocks if isinstance(block, H3KitTemporalConv)), 0)
     window = low.shape[2] if low.shape[2] <= 32 else min(low.shape[2] + 2 * overlap, 32 + 4 * overlap)
-    batch = 1 if spatial_tiles else low.shape[0]
-    # 放大块目标边长约64；非整数缩放的边界取整可能多占一个位置。
-    area = math.prod(min(s, 65) for s in size) if spatial_tiles else math.prod(size)
-    budget = batch * network.conv_in.out_channels * window * area * network.conv_in.weight.element_size() * 8
-    mm.load_models_gpu([patcher], memory_required=budget)
-    scale = (size[0] / low.shape[-2] + size[1] / low.shape[-1]) / 2
-    if spatial_tiles:
-        output = upscale_spatial_volume(network, low.to(device="cpu"), scale, (low.shape[2], *size))
-        return output.to(mm.intermediate_device())
-    mean, std = make_latent_statistics(device, network.conv_in.weight.dtype)
-    x = (low.to(device=device, dtype=mean.dtype) - mean) / std
-    # GroupNorm统计包含时间维。按真实连续序列放大，不能在接缝两侧大量复制帧后分别归一化。
-    output = network(x, scale=scale, target_size=(x.shape[2], *size))
-    return (output * std + mean).float().to(mm.intermediate_device())
+    unit_budget = network.conv_in.out_channels * window * network.conv_in.weight.element_size() * 8
+    shape = (low.shape[2], *size)
+
+    def whole():
+        mm.load_models_gpu([patcher], memory_required=unit_budget * low.shape[0] * math.prod(size))
+        mean, std = make_latent_statistics(device, network.conv_in.weight.dtype)
+        x = (low.to(device=device, dtype=mean.dtype) - mean) / std
+        grid = (*low.shape[-2:], *size, 0, 0, 0, 0, scale)
+        output = network(x, scale=scale, target_size=shape, spatial_grid=grid)
+        return fit_lifted_video((output * std + mean).float(), target).to(mm.intermediate_device())
+
+    if not spatial_tiles:
+        try:
+            return whole()
+        except torch.OutOfMemoryError:
+            if device.type != "cuda":
+                raise
+        logging.warning("[H3Kit SelfLift] 整幅放大显存不足，改用自动分块。")
+        gc.collect()
+        mm.soft_empty_cache()
+
+    tile_size = upscale_tile_size(low.shape[-2:], size, scale)
+    area = math.prod(min(dst, math.ceil(min(src, tile_size) * scale) + 1)
+                     for src, dst in zip(low.shape[-2:], size))
+    mm.load_models_gpu([patcher], memory_required=unit_budget * area)
+    logging.info("[H3Kit SelfLift] latent 放大自动分块：块边长=%d，倍率=%.4g。", tile_size, scale)
+    output = upscale_spatial_volume(network, low.to(device="cpu"), scale, shape, spatial_scale=scale)
+    return fit_lifted_video(output, target).to(mm.intermediate_device())
 
 
 def euler_step(state, x0, sigma, sigma_next):
     return state + (state - x0.to(state)) * ((sigma_next - sigma) / sigma).to(state)
 
 
-def release_high_context(video, mask, lifted, prefix):
-    """保留低清已生成的接缝动作，在首个新周期内逐渐放开高清续采。"""
-    count = min(TOKEN_PERIOD, video.shape[2] - prefix)
-    if count < 1:
-        return
-    end = prefix + count
-    free = mask[:, :, prefix:end] == 1
-    anchor = video[:, :, prefix:end]
-    anchor.copy_(torch.where(free, lifted[:, :, prefix:end].to(anchor), anchor))
-    ramp = 0.5 - 0.5 * torch.cos(torch.linspace(0, torch.pi, count, device=mask.device, dtype=mask.dtype))
-    mask[:, :, prefix:end] = torch.where(free, ramp[None, None, :, None, None], mask[:, :, prefix:end])
-
-
 def progressive_sample(model, positive, negative, latent, sigmas, seed, cfg,
                        high_steps, lowres_scale, weights, previous=None,
-                       continue_audio=True, lifter=learned_lift, sampler_name="euler",
+                       continue_audio=True, lifter=None, sampler_name="euler",
                        spatial_tiles=False, minimum_tiles=2, context_vae=None, previous_frames=None,
-                       boundary_check=True, upscale_spatial_tiles=False):
+                       boundary_check=True, upscale_spatial_tiles=True):
     if sampler_name != "euler":
         raise ValueError("当前 SelfLift 分辨率交接仅支持标准 euler。")
     if not isinstance(model.model, comfy.model_base.MiniMaxH3):
@@ -316,33 +331,34 @@ def progressive_sample(model, positive, negative, latent, sigmas, seed, cfg,
     if sigmas.ndim != 1 or not torch.isfinite(sigmas).all() or (sigmas[:-1] <= 0).any() or (sigmas[1:] > sigmas[:-1]).any() or sigmas[-1] != 0 or sigmas[split] >= 1:
         raise ValueError("SelfLift 需要递减且以 0 结束的 sigma，高清起始 sigma 必须小于 1。")
     video, audio, vm, am, low_carry, prefix, info = prepare_segment(
-        latent, previous, continue_audio, context_vae, previous_frames, boundary_check)
+        latent, previous, continue_audio, context_vae, previous_frames, boundary_check, lowres_scale)
     positive = shift_conditioning(positive, info["overlap_frames"], info["delivery_frames"])
     negative = shift_conditioning(negative, info["overlap_frames"], info["delivery_frames"])
     size = tuple(video.shape[-2:])
-    low_size = tuple(max(2, round(s * lowres_scale / 2) * 2) for s in size)
+    low_size = low_grid_size(size, lowres_scale)
     external_context = low_carry is None and prefix and latent.get("h3kit_motion_length") is not None
     if external_context:
         # 外部视频编码可能丢掉不足一个周期的尾帧；两阶段必须使用同一组22帧。
         if previous_frames is not None:
             video[:, :, :prefix] = encode_frame_prefix(video, context_vae, size, previous_frames).to(video)
-        low_prefix = encode_frame_prefix(video, context_vae, low_size, previous_frames).to(video)
-        low = torch.cat((low_prefix, resize_video(video[:, :, prefix:], low_size)), dim=2)
+        low_prefix = encode_frame_prefix(video, context_vae, low_size, previous_frames, lowres_scale).to(video)
+        low = torch.cat((low_prefix, to_low_grid(video[:, :, prefix:], low_size, lowres_scale)), dim=2)
         del low_prefix
         logging.info("[H3Kit SelfLift] encoded external 22-frame context at low resolution")
     else:
-        low = resize_video(video, low_size)
+        low = to_low_grid(video, low_size, lowres_scale)
         if low_carry is not None:
             if low_carry.shape[-2:] != low_size:
                 raise ValueError("前后段低清尺寸不一致，请保持目标分辨率和 lowres_scale 相同。")
             low[:, :, :prefix] = low_carry[:, :, -prefix:].to(low)
     del previous_frames
-    low_mask = resize_video(vm, low_size)
+    low_mask = to_low_grid(vm, low_size, lowres_scale)
     low_model = stage_model(model, low, audio, low_mask, am, prefix)
-    low_positive = resize_conditioning(positive, low_size)
+    low_positive = resize_conditioning(positive, low_size, lowres_scale)
     low_positive = add_motion_context(low_positive, info["overlap_frames"])
-    low_negative = resize_conditioning(negative, low_size)
-    positive = add_motion_context(positive, info["overlap_frames"])
+    low_negative = resize_conditioning(negative, low_size, lowres_scale)
+    positive = add_motion_context(strip_low_guides(positive), info["overlap_frames"])
+    negative = strip_low_guides(negative)
     sampler = comfy.samplers.sampler_object(sampler_name)
     preview = latent_preview.prepare_callback(model, steps)
     captured = {}
@@ -371,12 +387,16 @@ def progressive_sample(model, positive, negative, latent, sigmas, seed, cfg,
     latent_format = model.get_model_object("latent_format")
     native_low = latent_format.process_out(x0_video.float()).to(mm.intermediate_device()).clone()
     del low_model, low_latent, low, x0_video, x0_audio, state_audio, low_positive, low_negative
-    lifted = lifter(native_low, size, weights, spatial_tiles=upscale_spatial_tiles)
+    lifted = (learned_lift(native_low, size, weights, scale=1 / lowres_scale, spatial_tiles=upscale_spatial_tiles)
+              if lifter is None else lifter(native_low, size, weights, spatial_tiles=upscale_spatial_tiles))
     lifted[:, :, :prefix].copy_(video[:, :, :prefix].to(lifted))
-    if external_context:
-        release_high_context(video, vm, lifted, prefix)
+    # 原生串联已有高低清状态，只锁历史；像素锚点仅用于外部动作续接。
+    # 避免正文从重编码锚点切回高清生成时出现色差。
+    decode_prefix = (anchor_prefix(video, vm, lifted, native_low, context_vae, prefix, lowres_scale=lowres_scale)
+                     if external_context else None)
     high_x0 = latent_format.process_in(lifted)
-    noise = comfy.sample.prepare_noise(high_x0, seed, latent.get("batch_index")).to(high_x0)
+    high_seed = seed if info["overlap_frames"] else (seed + 1) % (1 << 64)
+    noise = comfy.sample.prepare_noise(high_x0, high_seed, latent.get("batch_index")).to(high_x0)
     video_next = euler_step(sampling.noise_scaling(sigma, noise, high_x0), high_x0, sigma, next_sigma)
     high_anchor = NestedTensor([video, audio])
     anchors = model.model.process_latent_in(high_anchor).unbind()
@@ -409,4 +429,5 @@ def progressive_sample(model, positive, negative, latent, sigmas, seed, cfg,
     result["samples"] = output.to(device=mm.intermediate_device(), dtype=mm.intermediate_dtype())
     result[LOW_CARRY] = native_low[:, :, -CONTEXT_TOKENS:].clone().to(dtype=mm.intermediate_dtype())
     result[SEGMENT] = info
+    attach_decode_prefix(result, decode_prefix)
     return result

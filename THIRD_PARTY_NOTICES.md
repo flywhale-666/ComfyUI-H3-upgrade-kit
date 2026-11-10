@@ -18,6 +18,8 @@
 
 ## SelfLift 续接采样（2026-09-18）
 
+2026-10-19修复续接边界：参考已对照的 facok/comfyui-SelfLift 与 slmonker/selflift-Avatar 像素/VAE锚点思路，将锚点限定到历史22帧及正文前12帧；解码时使用同源前缀副本，原采样历史和音频保持不变。通过本插件已有VAE解码节点接入，不增加外部插件或联网依赖。下文“未引入像素/VAE校正”描述最初移植状态。
+
 `selflift_sampling.py` 的渐进分辨率交接、双分辨率上下文、Soft AV和升采样时间边界改编自 [Songssx/ComfyUI-MiniMaxH3-TimelineDirector](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector)，提交 `03915aae320d186f1498d12a847689af0902785d` 的 `selflift_runtime/`、`drift_control_av.py` 和 `experimental_latent_guide.py`，遵循其 GPL-3.0 许可，完整许可见本目录 `LICENSE`。
 
 该项目的渐进采样来源为 [facok/comfyui-SelfLift](https://github.com/facok/comfyui-SelfLift)，对照版本 `19ec540505dcbc261aaecf450d83c7536be2826d`；Drift-Control AV 来源为 [ethanfel/ComfyUI-MiniMaxH3-Contex-Loop](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop)。保留这些来源说明。本次仅移植所需 H3 推理算法，复用本插件的 LBH-123-AI 放大网络，不引入时间线、像素/VAE 校正、TST 或运行时外部插件依赖。

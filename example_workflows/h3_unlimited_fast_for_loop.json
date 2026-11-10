@@ -1047,14 +1047,14 @@
     },
     {
       "id": 124,
-      "type": "VAEDecode",
+      "type": "H3KitVAEDecodeTiled",
       "pos": [
         1414.8328072249,
         4748.4316835965565
       ],
       "size": [
-        230,
-        60
+        300,
+        180
       ],
       "flags": {
         "collapsed": false
@@ -1064,13 +1064,13 @@
       "inputs": [
         {
           "localized_name": "Latent",
-          "name": "samples",
+          "name": "video_latent",
           "type": "LATENT",
           "link": 713
         },
         {
           "localized_name": "vae",
-          "name": "vae",
+          "name": "video_vae",
           "type": "VAE",
           "link": 263
         }
@@ -1078,7 +1078,7 @@
       "outputs": [
         {
           "localized_name": "图像",
-          "name": "IMAGE",
+          "name": "decoded_frames",
           "type": "IMAGE",
           "links": [
             297,
@@ -1088,10 +1088,15 @@
         }
       ],
       "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.30.1",
-        "Node name for S&R": "VAEDecode"
-      }
+        "cnr_id": "comfyui-h3-upgrade-kit",
+        "ver": "0.0.21",
+        "Node name for S&R": "H3KitVAEDecodeTiled"
+      },
+      "widgets_values": [
+        256,
+        64,
+        8
+      ]
     },
     {
       "id": 123,
@@ -1143,14 +1148,14 @@
     },
     {
       "id": 195,
-      "type": "VAEDecode",
+      "type": "H3KitVAEDecodeTiled",
       "pos": [
         2855.084531874943,
         4698.355709506795
       ],
       "size": [
-        230,
-        60
+        300,
+        180
       ],
       "flags": {
         "collapsed": false
@@ -1160,13 +1165,13 @@
       "inputs": [
         {
           "localized_name": "Latent",
-          "name": "samples",
+          "name": "video_latent",
           "type": "LATENT",
           "link": 706
         },
         {
           "localized_name": "vae",
-          "name": "vae",
+          "name": "video_vae",
           "type": "VAE",
           "link": 384
         }
@@ -1174,7 +1179,7 @@
       "outputs": [
         {
           "localized_name": "图像",
-          "name": "IMAGE",
+          "name": "decoded_frames",
           "type": "IMAGE",
           "links": [
             679
@@ -1182,10 +1187,15 @@
         }
       ],
       "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.30.1",
-        "Node name for S&R": "VAEDecode"
-      }
+        "cnr_id": "comfyui-h3-upgrade-kit",
+        "ver": "0.0.21",
+        "Node name for S&R": "H3KitVAEDecodeTiled"
+      },
+      "widgets_values": [
+        256,
+        64,
+        8
+      ]
     },
     {
       "id": 114,
@@ -2820,7 +2830,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.20",
+        "ver": "0.0.21",
         "Node name for S&R": "H3KitSelfLiftSampler"
       },
       "widgets_values": [
@@ -3060,7 +3070,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-h3-upgrade-kit",
-        "ver": "0.0.20",
+        "ver": "0.0.21",
         "Node name for S&R": "H3KitSelfLiftSampler"
       },
       "widgets_values": [

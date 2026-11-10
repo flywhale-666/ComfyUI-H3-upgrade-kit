@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 
 from comfy.ldm.minimax.model import FRAME_PER_TOKEN
+from .selflift_geometry import to_low_grid
 
 
 CONTEXT_FRAMES = 22
@@ -44,7 +45,8 @@ def decoded_video_tail(video, vae):
     return image_frames(vae.decode(video[:, :, start:]))[-CONTEXT_FRAMES:]
 
 
-def native_video_tail(video, vae=None, previous_frames=None, check=False, align_to_frames=False):
+def native_video_tail(video, vae=None, previous_frames=None, check=False, align_to_frames=False,
+                      *, lowres_scale=None, reference_size=None):
     if video.ndim != 5 or video.shape[2] < CONTEXT_TOKENS or video.shape[2] % TOKEN_PERIOD != 2:
         raise ValueError('22帧续接需要至少7个时间步、长度为5k+2的完整H3视频latent。')
     tail = video[:, :, -CONTEXT_TOKENS:].clone()
@@ -59,6 +61,9 @@ def native_video_tail(video, vae=None, previous_frames=None, check=False, align_
     if len(previous_frames) < CONTEXT_FRAMES:
         raise ValueError('previous_frames须包含前段完整画面或至少22张连续尾帧。')
     expected = previous_frames[-CONTEXT_FRAMES:, ..., :3]
+    if align_to_frames and lowres_scale is not None:
+        expected = to_low_grid(expected.movedim(-1, 1), video.shape[-2:], lowres_scale,
+                               high_size=reference_size, pixels=True).movedim(1, -1)
     size = (video.shape[-2]*16, video.shape[-1]*16)
     if tuple(expected.shape[1:3]) != size:
         expected = F.interpolate(expected.movedim(-1, 1), size=size, mode='area').movedim(1, -1)
